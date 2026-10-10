@@ -1,4 +1,4 @@
-"""Fuentes de ofertas de empleo. Solo canales permitidos: APIs oficiales y alertas por correo.
+"""Fuentes de ofertas de empleo. Solo canales permitidos: APIs oficiales (con o sin clave) y alertas por correo.
 
 LinkedIn, Indeed y Tecnoempleo prohíben el scraping: de ellos solo se leen los correos de alerta.
 """
@@ -90,6 +90,94 @@ def infojobs(prefs: dict) -> list[Offer]:
                                  f"Requisitos: {o.get('requirementMin', '')}")[:MAX_DESC],
                     budget=salary,
                 ))
+    return offers
+
+
+# ---------------------------------------------------------------- Bolsas remotas con API pública (sin clave)
+
+# Solo se guardan ofertas que se pueden hacer desde España: las que exigen vivir en otro país se descartan aquí.
+REMOTE_FROM_SPAIN = re.compile(r"worldwide|anywhere|europe|emea|spain|españa|\bcet\b|\beu\b", re.I)
+PUBLIC_MAX_DAYS = 14  # las APIs devuelven también ofertas viejas: solo las de las últimas 2 semanas
+TECH_AREA = re.compile(r"software|devops|data|machine|artificial|\bai\b|developer|programming", re.I)  # áreas de Jobicy
+
+
+def _recent(published: datetime) -> bool:
+    return published >= datetime.now(published.tzinfo) - timedelta(days=PUBLIC_MAX_DAYS)
+
+
+def getonboard(prefs: dict) -> list[Offer]:
+    """Get on Board (tech en LatAm y España). Solo 100 % remoto desde cualquier país o con España entre los países."""
+    offers, seen = [], set()
+    for q in prefs.get("busquedas", []):
+        r = requests.get("https://www.getonbrd.com/api/v0/search/jobs",
+                         params={"query": q, "per_page": 50, "expand": '["company"]'}, headers=UA, timeout=30)
+        r.raise_for_status()
+        for job in r.json().get("data", []):
+            a = job["attributes"]
+            countries = a.get("countries") or []
+            if job["id"] in seen or not _recent(datetime.fromtimestamp(a.get("published_at") or 0)):
+                continue
+            if a.get("remote_modality") != "fully_remote" and not {"Spain", "España"} & set(countries):
+                continue
+            seen.add(job["id"])
+            company = ((a.get("company") or {}).get("data") or {}).get("attributes", {}).get("name", "")
+            salary = ""
+            if a.get("min_salary"):
+                salary = f"{a['min_salary']}-{a.get('max_salary') or a['min_salary']} USD/mes"
+            offers.append(Offer(
+                source="getonboard",
+                external_id=job["id"],
+                title=f"{a.get('title', '')} @ {company}".strip(" @"),
+                url=(job.get("links") or {}).get("public_url", f"https://www.getonbrd.com/jobs/{job['id']}"),
+                description=(f"Modalidad: {a.get('remote_modality')} · Países: {', '.join(countries) or 'n/d'}\n"
+                             f"{strip_html(a.get('description', ''))}\n{strip_html(a.get('functions', ''))}")[:MAX_DESC],
+                budget=salary,
+            ))
+    return offers
+
+
+def remotive(prefs: dict) -> list[Offer]:
+    """Remotive (remoto internacional). Una sola consulta por corrida: pide no abusar de su API."""
+    r = requests.get("https://remotive.com/api/remote-jobs", headers=UA, timeout=60)
+    r.raise_for_status()
+    offers = []
+    for job in r.json().get("jobs", []):
+        location = job.get("candidate_required_location", "")
+        if not REMOTE_FROM_SPAIN.search(location):
+            continue
+        if not _recent(datetime.fromisoformat(job.get("publication_date", "1970-01-01T00:00:00"))):
+            continue
+        offers.append(Offer(
+            source="remotive",
+            external_id=str(job["id"]),
+            title=f"{job.get('title', '')} @ {job.get('company_name', '')}".strip(" @"),
+            url=job.get("url", ""),
+            description=(f"Modalidad: remoto · Ubicación aceptada: {location} · Jornada: {job.get('job_type') or 'n/d'}\n"
+                         f"Categoría: {job.get('category', '')}\n{strip_html(job.get('description', ''))}")[:MAX_DESC],
+            budget=job.get("salary", ""),
+        ))
+    return offers
+
+
+def jobicy(prefs: dict) -> list[Offer]:
+    """Jobicy (remoto). El filtro geo=spain ya deja solo ofertas abiertas a España."""
+    r = requests.get("https://jobicy.com/api/v2/remote-jobs", params={"count": 100, "geo": "spain"}, headers=UA, timeout=30)
+    r.raise_for_status()
+    offers = []
+    for job in r.json().get("jobs", []):
+        if not _recent(datetime.fromisoformat(job.get("pubDate", "1970-01-01T00:00:00+00:00"))):
+            continue
+        if not TECH_AREA.search(" ".join(job.get("jobIndustry") or [])):
+            continue  # ventas, soporte, marketing...: sus descripciones nombran "data" o "AI" y pasarían el pre-filtro
+        offers.append(Offer(
+            source="jobicy",
+            external_id=str(job["id"]),
+            title=f"{job.get('jobTitle', '')} @ {job.get('companyName', '')}".strip(" @"),
+            url=job.get("url", ""),
+            description=(f"Modalidad: remoto · Ubicación aceptada: {job.get('jobGeo', '')} · "
+                         f"Jornada: {', '.join(job.get('jobType') or []) or 'n/d'} · Nivel: {job.get('jobLevel', 'n/d')}\n"
+                         f"{strip_html(job.get('jobDescription') or job.get('jobExcerpt', ''))}")[:MAX_DESC],
+        ))
     return offers
 
 
@@ -188,6 +276,7 @@ def email_alerts() -> list[Offer]:
 
 
 API_KEYS = {"adzuna": "ADZUNA_APP_ID", "infojobs": "INFOJOBS_CLIENT_ID"}
+PUBLIC_APIS = {"getonboard", "remotive", "jobicy"}
 
 
 def _api_turn(conn, name: str, every_hours: int) -> bool:
@@ -199,18 +288,23 @@ def _api_turn(conn, name: str, every_hours: int) -> bool:
 def collect(prefs: dict, conn) -> tuple[list[Offer], dict[str, str]]:
     """Recolecta de todas las fuentes. Devuelve (ofertas, errores por fuente).
 
-    Los correos se leen en cada corrida; las APIs solo cada `cada_horas_api` horas.
+    Los correos se leen en cada corrida; las APIs (con o sin clave) solo cada `cada_horas_api` horas.
     """
     every = int(prefs.get("cada_horas_api", 6))
     fetchers = {
         "adzuna": lambda: adzuna(prefs),
         "infojobs": lambda: infojobs(prefs),
+        "getonboard": lambda: getonboard(prefs),
+        "remotive": lambda: remotive(prefs),
+        "jobicy": lambda: jobicy(prefs),
         "correo": email_alerts,
     }
     offers, errors = [], {}
     for name, fetch in fetchers.items():
         if name in API_KEYS and not (env(API_KEYS[name]) and _api_turn(conn, name, every)):
             continue  # sin clave, o ya se consultó en este bloque de horas
+        if name in PUBLIC_APIS and not _api_turn(conn, name, every):
+            continue  # APIs públicas: también cada `cada_horas_api` horas, por cortesía
         try:
             offers.extend(fetch())
         except Exception as e:  # una fuente caída no debe frenar a las demás
