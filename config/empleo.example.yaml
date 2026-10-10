@@ -1,0 +1,49 @@
+# Preferencias de búsqueda de EMPLEO (agente `empleo`). Ejemplo público.
+#   cp config/empleo.example.yaml config/empleo.yaml   # y completarlo (empleo.yaml nunca se sube a git)
+# Las habilidades y la experiencia se toman de config/profile.yaml.
+
+pais: es                       # código de país para Adzuna
+ciudades_presencial: [Madrid]  # donde aceptas trabajo híbrido o presencial
+remoto: true                   # aceptar ofertas 100 % remotas (en todo el país)
+preferencia: remoto            # remoto | hibrido | indiferente  (la preferida suma un punto)
+
+# Jornada: elige una o ambas. "completa" con permiso limitado se avisa, pero marcada.
+jornadas: [parcial, completa]
+permiso_trabajo:
+  tipo: estudiante             # estudiante | cuenta_ajena | ue | ...
+  horas_max_semana: 30         # vacío = sin límite
+practicas: true                # las prácticas / convenios universitarios suman un punto
+
+# Búsquedas que se lanzan en las APIs (Adzuna, InfoJobs)
+busquedas:
+  - python
+  - inteligencia artificial
+  - machine learning
+  - data scientist
+  - ai engineer
+
+# Pre-filtro gratis antes del modelo (minúsculas, palabra completa)
+palabras_clave:
+  - python
+  - ia
+  - ai
+  - inteligencia artificial
+  - machine learning
+  - llm
+  - data
+  - datos
+  - backend
+  - automatización
+  - automation
+excluir:
+  - comercial
+  - teleoperador
+  - teleoperadora
+  - camarero
+  - camarera
+  - dependiente
+  - dependienta
+  - repartidor
+
+umbral_aviso: 7                # puntaje mínimo (0-10) para avisar por Telegram
+max_avisos_por_corrida: 10

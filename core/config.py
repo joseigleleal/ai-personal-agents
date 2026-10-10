@@ -26,13 +26,18 @@ def env_int(name: str, default: int) -> int:
     return int(env(name, str(default)))
 
 
-def load_profile() -> dict:
-    """Usa config/profile.yaml (perfil real); si no existe, el de ejemplo."""
-    path = ROOT / "config" / "profile.yaml"
+def load_config(name: str) -> dict:
+    """Usa config/<name>.yaml (datos reales, fuera de git); si no existe, config/<name>.example.yaml."""
+    path = ROOT / "config" / f"{name}.yaml"
     if not path.exists():
-        path = ROOT / "config" / "profile.example.yaml"
+        path = ROOT / "config" / f"{name}.example.yaml"
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def load_profile() -> dict:
+    """Perfil profesional (habilidades, experiencia): config/profile.yaml o el de ejemplo."""
+    return load_config("profile")
 
 
 def profile_summary(profile: dict) -> str:

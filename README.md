@@ -32,6 +32,7 @@ programador (launchd en Mac / systemd en servidor)
 
 - `freelance`: busca ofertas, las puntúa según el perfil y redacta borradores de propuesta (cada 2 h).
 - `fx`: sigue la tasa EUR → COP y avisa cuando está barata frente a los últimos 90 días (cada 4 h). No usa modelo.
+- `empleo`: busca empleo en España (Adzuna, InfoJobs y alertas por correo de LinkedIn/Indeed/Tecnoempleo) y puntúa según jornada, permiso de trabajo y modalidad (cada 6 h).
 
 ## Estructura
 
@@ -50,7 +51,8 @@ agents/freelance/     agente freelance asistido
 agents/fx/            agente de tasa EUR → COP
   sources.py          TRM (Banco de la República) × EUR/USD (BCE) + control con open.er-api
   run.py              percentil frente a 30/90/365 días, avisos y margen de cada app
-config/              profile.example.yaml (plantilla) → profile.yaml (tu perfil, palabras clave y umbral)
+agents/empleo/        agente de empleo en España (sources, scorer, run)
+config/              profile.example.yaml → profile.yaml (tu perfil) · empleo.example.yaml → empleo.yaml
 scripts/              launchd (Mac), setup y timers de systemd (Oracle), creación de la VM
 data/                 base de datos, reportes y logs (no se comparte)
 ```
@@ -91,6 +93,23 @@ Señal: la tasa de hoy está entre el 20 % más barato de los últimos 90 días 
 `FX_ALERTA_EUR_COP`. Cada domingo envía un resumen. No predice el futuro: compara con el historial.
 Las tasas de las apps (Global66, bancos) se registran a mano: Global66 no tiene API pública y bloquea bots.
 
+### Agente de empleo (España)
+
+```bash
+cp config/empleo.example.yaml config/empleo.yaml   # ciudades, jornada, permiso de trabajo (privado, fuera de git)
+.venv/bin/python -m agents.empleo.run --solo-fuentes
+.venv/bin/python -m agents.empleo.run
+```
+
+Fuentes: **Adzuna** (`ADZUNA_APP_ID/KEY`, gratis) e **InfoJobs** (`INFOJOBS_CLIENT_ID/SECRET`) por API oficial.
+LinkedIn, Indeed y Tecnoempleo prohíben el scraping: se crean alertas en cada portal y el agente lee esos
+correos por IMAP (sin marcarlos como leídos). Las habilidades salen de `profile.yaml`.
+
+Reglas de puntaje: remoto o híbrido/presencial solo en `ciudades_presencial`; si la jornada supera
+`permiso_trabajo.horas_max_semana` la oferta se avisa marcada ("requiere ajustar jornada"), salvo que
+`jornadas` no incluya `completa`; las prácticas suman un punto; pedir nacionalidad UE baja el puntaje.
+Nunca postula: avisa por Telegram y deja `data/reports/empleo-AAAA-MM-DD.md`.
+
 ## Despliegue en Oracle Cloud (Always Free)
 
 ```bash
@@ -101,7 +120,7 @@ nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 
 git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
 cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa los timers (freelance 2 h, fx 4 h)
 nano .env                                   # completar Telegram, correo, etc. (o copiarlo con scp)
-# y copiar el perfil real desde la Mac: scp config/profile.yaml ubuntu@<ip>:~/personal-agents/config/
+# y copiar el perfil real desde la Mac: scp config/profile.yaml config/empleo.yaml ubuntu@<ip>:~/personal-agents/config/
 sudo systemctl start agentic-freelance.service && journalctl -u agentic-freelance.service -f
 ```
 

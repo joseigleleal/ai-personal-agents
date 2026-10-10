@@ -2,14 +2,15 @@
 # Programa un agente con launchd (macOS).
 # Uso:   ./scripts/instalar_launchd.sh [agente]              -> instala (por defecto: freelance)
 #        ./scripts/instalar_launchd.sh [agente] desinstalar
-# Agentes: freelance (cada 2 h) · fx (cada 4 h)
+# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 6 h)
 set -e
 
 AGENT="${1:-freelance}"
 case "$AGENT" in
   freelance) INTERVAL=7200 ;;
   fx)        INTERVAL=14400 ;;
-  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx)"; exit 1 ;;
+  empleo)    INTERVAL=21600 ;;
+  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo)"; exit 1 ;;
 esac
 
 LABEL="com.agentic.$AGENT"

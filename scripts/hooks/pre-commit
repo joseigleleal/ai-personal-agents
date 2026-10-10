@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-FORBIDDEN='^(\.env|config/profile\.yaml|memoria\.md|CLAUDE\.md|\.secret-patterns|data/)'
+FORBIDDEN='^(\.env|config/(profile|empleo)\.yaml|memoria\.md|CLAUDE\.md|\.secret-patterns)$|^data/'
 PATTERNS='sk-ant-[A-Za-z0-9]|gsk_[A-Za-z0-9]{10}|BEGIN [A-Z ]*PRIVATE KEY|@gmail\.com|ocid1\.(tenancy|user)\.|[0-9]{8,10}:[A-Za-z0-9_-]{35}'
 
 files="$(git diff --cached --name-only --diff-filter=ACMR)"

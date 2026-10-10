@@ -83,11 +83,12 @@ EOF
 
 install_agent freelance 2h
 install_agent fx 4h
+install_agent empleo 6h
 sudo systemctl daemon-reload
-sudo systemctl enable --now agentic-freelance.timer agentic-fx.timer
+sudo systemctl enable --now agentic-freelance.timer agentic-fx.timer agentic-empleo.timer
 
 echo
-echo "Listo. Comandos útiles (cambia 'freelance' por 'fx' para el otro agente):"
+echo "Listo. Comandos útiles (cambia 'freelance' por 'fx' o 'empleo'):"
 echo "  systemctl list-timers 'agentic-*'                  # próximas corridas"
 echo "  sudo systemctl start agentic-freelance.service     # correr ahora"
 echo "  journalctl -u agentic-freelance.service -f         # ver logs"

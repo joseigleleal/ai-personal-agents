@@ -1,6 +1,7 @@
 # Secretos y datos locales: nunca en git
 .env
 config/profile.yaml
+config/empleo.yaml
 data/
 *.log
 
