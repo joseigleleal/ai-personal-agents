@@ -58,6 +58,14 @@ for f in config/profile.yaml config/empleo.yaml; do
   if [ -f "$f" ]; then ok "$f"; else warn "$f no existe (se usa el de ejemplo)"; fi
 done
 
+if [ -f memoria.md ]; then  # notas locales (fuera de git): guía paso a paso de lo que falta configurar
+  pending="$(awk '/^## .*Pendientes del usuario/{on=1; next} /^## /{on=0} on && /^### [0-9]+\. \[ \]/' memoria.md)"
+  if [ -n "$pending" ]; then
+    warn "Pendientes abiertos: $(grep -c . <<<"$pending") (pasos en memoria.md › Pendientes del usuario)"
+    sed -E 's/^### [0-9]+\. \[ \] /    · /' <<<"$pending"
+  fi
+fi
+
 title "Git"
 branch="$(git rev-parse --abbrev-ref HEAD)"
 changes="$(git status --porcelain | grep -c .)"
