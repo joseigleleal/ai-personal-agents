@@ -2,15 +2,16 @@
 # Programa un agente con launchd (macOS).
 # Uso:   ./scripts/instalar_launchd.sh [agente]              -> instala (por defecto: freelance)
 #        ./scripts/instalar_launchd.sh [agente] desinstalar
-# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 6 h)
+# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 2 h) · recordatorio (diario, a las 9:00)
 set -e
 
 AGENT="${1:-freelance}"
 case "$AGENT" in
   freelance) INTERVAL=7200 ;;
   fx)        INTERVAL=14400 ;;
-  empleo)    INTERVAL=21600 ;;
-  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo)"; exit 1 ;;
+  empleo)    INTERVAL=7200 ;;
+  recordatorio) HOUR=9 ;;
+  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo, recordatorio)"; exit 1 ;;
 esac
 
 LABEL="com.agentic.$AGENT"
@@ -22,6 +23,14 @@ if [[ "$2" == "desinstalar" ]]; then
   rm -f "$PLIST"
   echo "Agente $AGENT desinstalado."
   exit 0
+fi
+
+if [[ -n "${HOUR:-}" ]]; then   # todos los días a una hora fija
+  SCHEDULE="  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>$HOUR</integer><key>Minute</key><integer>0</integer></dict>"
+  WHEN="todos los días a las $HOUR:00"
+else
+  SCHEDULE="  <key>StartInterval</key><integer>$INTERVAL</integer>"
+  WHEN="cada $((INTERVAL / 3600)) h"
 fi
 
 mkdir -p "$PROJECT/data"
@@ -38,7 +47,7 @@ cat > "$PLIST" <<EOF
     <string>agents.$AGENT.run</string>
   </array>
   <key>WorkingDirectory</key><string>$PROJECT</string>
-  <key>StartInterval</key><integer>$INTERVAL</integer>
+$SCHEDULE
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>$PROJECT/data/$AGENT.log</string>
   <key>StandardErrorPath</key><string>$PROJECT/data/$AGENT.log</string>
@@ -48,4 +57,4 @@ EOF
 
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "Agente $AGENT instalado: corre cada $((INTERVAL / 3600)) h. Log: $PROJECT/data/$AGENT.log"
+echo "Agente $AGENT instalado: corre $WHEN. Log: $PROJECT/data/$AGENT.log"

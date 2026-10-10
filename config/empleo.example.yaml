@@ -14,6 +14,10 @@ permiso_trabajo:
   horas_max_semana: 30         # vacío = sin límite
 practicas: true                # las prácticas / convenios universitarios suman un punto
 
+# El agente corre cada 2 h y lee las alertas por correo en cada corrida; las APIs (Adzuna, InfoJobs)
+# solo cada `cada_horas_api` horas, para no pasar su límite gratis.
+cada_horas_api: 6
+
 # Búsquedas que se lanzan en las APIs (Adzuna, InfoJobs)
 busquedas:
   - python

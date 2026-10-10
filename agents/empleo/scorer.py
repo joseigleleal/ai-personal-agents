@@ -90,7 +90,12 @@ def score(offer: Offer, profile: dict, prefs: dict, conn) -> dict | None:
         f"Description:\n{offer.description[:3000]}"
     )
     answer, error = None, None
-    for backend in llm.backend_chain("SCORER_BACKEND", "ollama", "SCORER_FALLBACK"):
+    # Backend propio del agente (ej. groq con respaldo ollama); si no se define, el general SCORER_BACKEND
+    if env("EMPLEO_SCORER_BACKEND"):
+        chain = llm.backend_chain("EMPLEO_SCORER_BACKEND", "ollama", "EMPLEO_SCORER_FALLBACK")
+    else:
+        chain = llm.backend_chain("SCORER_BACKEND", "ollama", "SCORER_FALLBACK")
+    for backend in chain:
         if not llm.is_ready(backend):
             continue
         try:

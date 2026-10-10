@@ -32,7 +32,8 @@ programador (launchd en Mac / systemd en servidor)
 
 - `freelance`: busca ofertas, las puntúa según el perfil y redacta borradores de propuesta (cada 2 h).
 - `fx`: sigue la tasa EUR → COP y avisa cuando está barata frente a los últimos 90 días (cada 4 h). No usa modelo.
-- `empleo`: busca empleo en España (Adzuna, InfoJobs y alertas por correo de LinkedIn/Indeed/Tecnoempleo) y puntúa según jornada, permiso de trabajo y modalidad (cada 6 h).
+- `empleo`: busca empleo en España (Adzuna, InfoJobs y alertas por correo de LinkedIn/Indeed/Tecnoempleo) y puntúa según jornada, permiso de trabajo y modalidad (cada 2 h; las APIs cada 6 h).
+- `recordatorio`: cada día a las 9:00 envía por Telegram los pendientes de configuración abiertos y los pasos del siguiente (solo en la Mac; los lee de las notas locales).
 
 ## Estructura
 
@@ -52,6 +53,7 @@ agents/fx/            agente de tasa EUR → COP
   sources.py          TRM (Banco de la República) × EUR/USD (BCE) + control con open.er-api
   run.py              percentil frente a 30/90/365 días, avisos y margen de cada app
 agents/empleo/        agente de empleo en España (sources, scorer, run)
+agents/recordatorio/  recordatorio diario de pendientes por Telegram
 config/              profile.example.yaml → profile.yaml (tu perfil) · empleo.example.yaml → empleo.yaml
 scripts/              launchd (Mac), setup y timers de systemd (Oracle), creación de la VM
 data/                 base de datos, reportes y logs (no se comparte)
@@ -78,7 +80,7 @@ En `.env`, `SCORER_BACKEND` (puntuar) y `WRITER_BACKEND` (redactar) aceptan `oll
 `SCORER_FALLBACK` y `WRITER_FALLBACK` definen un segundo backend por si el primero no está disponible o falla.
 Groq necesita `GROQ_API_KEY` (gratis en console.groq.com) y sirve en servidores sin RAM para un modelo local.
 
-Programarlo en la Mac: `./scripts/instalar_launchd.sh freelance` (cada 2 h) o `./scripts/instalar_launchd.sh fx` (cada 4 h).
+Programarlo en la Mac: `./scripts/instalar_launchd.sh <agente>` (freelance y empleo cada 2 h, fx cada 4 h, recordatorio a diario a las 9:00).
 Quitarlo: `./scripts/instalar_launchd.sh <agente> desinstalar`.
 Ver qué está corriendo (agentes, reintento de Oracle, Ollama, configuración y git): `./scripts/estado.sh`.
 
@@ -104,7 +106,9 @@ cp config/empleo.example.yaml config/empleo.yaml   # ciudades, jornada, permiso 
 
 Fuentes: **Adzuna** (`ADZUNA_APP_ID/KEY`, gratis) e **InfoJobs** (`INFOJOBS_CLIENT_ID/SECRET`) por API oficial.
 LinkedIn, Indeed y Tecnoempleo prohíben el scraping: se crean alertas en cada portal y el agente lee esos
-correos por IMAP (sin marcarlos como leídos). Las habilidades salen de `profile.yaml`.
+correos por IMAP (sin marcarlos como leídos) en cada corrida; las APIs se consultan cada `cada_horas_api` horas para
+no pasar su límite gratis. Las habilidades salen de `profile.yaml`. Para puntuar puede usar su propio modelo:
+`EMPLEO_SCORER_BACKEND=groq` con `EMPLEO_SCORER_FALLBACK=ollama` (si Groq falla o llega a su límite, sigue con Ollama).
 
 Reglas de puntaje: remoto o híbrido/presencial solo en `ciudades_presencial`; si la jornada supera
 `permiso_trabajo.horas_max_semana` la oferta se avisa marcada ("requiere ajustar jornada"), salvo que

@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import requests
 
 from agents.freelance.sources import MAX_DESC, UA, Offer, _html_body, _LinkParser, strip_html
+from core import db
 from core.config import env
 
 # ---------------------------------------------------------------- Adzuna (API oficial, clave gratis)
@@ -140,8 +141,21 @@ def email_alerts() -> list[Offer]:
     return offers
 
 
-def collect(prefs: dict) -> tuple[list[Offer], dict[str, str]]:
-    """Recolecta de todas las fuentes. Devuelve (ofertas, errores por fuente)."""
+API_KEYS = {"adzuna": "ADZUNA_APP_ID", "infojobs": "INFOJOBS_CLIENT_ID"}
+
+
+def _api_turn(conn, name: str, every_hours: int) -> bool:
+    """True una vez por bloque de `every_hours` horas: cuida el límite gratis de las APIs (Adzuna ~250 pedidos/día)."""
+    now = datetime.now()
+    return db.alert_once(conn, f"fuente:{name}:{now:%Y-%m-%d}:{now.hour // every_hours}")
+
+
+def collect(prefs: dict, conn) -> tuple[list[Offer], dict[str, str]]:
+    """Recolecta de todas las fuentes. Devuelve (ofertas, errores por fuente).
+
+    Los correos se leen en cada corrida; las APIs solo cada `cada_horas_api` horas.
+    """
+    every = int(prefs.get("cada_horas_api", 6))
     fetchers = {
         "adzuna": lambda: adzuna(prefs),
         "infojobs": lambda: infojobs(prefs),
@@ -149,6 +163,8 @@ def collect(prefs: dict) -> tuple[list[Offer], dict[str, str]]:
     }
     offers, errors = [], {}
     for name, fetch in fetchers.items():
+        if name in API_KEYS and not (env(API_KEYS[name]) and _api_turn(conn, name, every)):
+            continue  # sin clave, o ya se consultó en este bloque de horas
         try:
             offers.extend(fetch())
         except Exception as e:  # una fuente caída no debe frenar a las demás

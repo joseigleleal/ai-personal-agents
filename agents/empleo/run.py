@@ -56,7 +56,7 @@ def main() -> None:
 
     prefs, profile = load_config("empleo"), load_profile()
     conn = db.connect()
-    offers, errors = sources.collect(prefs)
+    offers, errors = sources.collect(prefs, conn)
 
     unique = {o.id: o for o in offers}
     new = [o for o in unique.values() if not db.offer_exists(conn, o.id)]

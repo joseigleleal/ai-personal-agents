@@ -83,7 +83,7 @@ EOF
 
 install_agent freelance 2h
 install_agent fx 4h
-install_agent empleo 6h
+install_agent empleo 2h
 sudo systemctl daemon-reload
 sudo systemctl enable --now agentic-freelance.timer agentic-fx.timer agentic-empleo.timer
 
