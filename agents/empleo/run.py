@@ -65,7 +65,7 @@ def main() -> None:
 
     prefs, profile = load_config("empleo"), load_profile()
     conn = db.connect()
-    offers, errors = sources.collect(prefs, conn)
+    offers, errors = sources.collect(prefs, conn, use_turns=not args.solo_fuentes)  # la prueba no gasta turnos
 
     unique = {}
     for o in offers:  # si la misma oferta aparece como recomendada y como postulada, gana "postulada"

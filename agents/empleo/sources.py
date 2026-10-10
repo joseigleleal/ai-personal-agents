@@ -3,16 +3,20 @@
 LinkedIn, Indeed y Tecnoempleo prohíben el scraping: de ellos solo se leen los correos de alerta.
 """
 import email
+import html
 import imaplib
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
+import certifi
 import requests
 
 from agents.freelance.sources import MAX_DESC, UA, Offer, _html_body, _LinkParser, strip_html
 from core import db
-from core.config import env
+from core.config import DATA_DIR, ROOT, env
 
 # ---------------------------------------------------------------- Adzuna (API oficial, clave gratis)
 
@@ -181,6 +185,89 @@ def jobicy(prefs: dict) -> list[Offer]:
     return offers
 
 
+# ---------------------------------------------------------------- Salamanca: USAL (RSS) y ECYL (datos abiertos)
+
+# empleo.usal.es no envía el certificado intermedio (GEANT TLS RSA 1): se suma al almacén de certifi solo para ese sitio.
+USAL_FEEDS = {"empleo": "https://empleo.usal.es/trabajo/sipoerss", "practicas": "https://empleo.usal.es/practicas/sipcprss"}
+USAL_ID = re.compile(r"[?&]id=(\d+)")
+
+
+def _usal_ca_bundle() -> str:
+    path = DATA_DIR / "ca-bundle-usal.pem"
+    if not path.exists():
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(Path(certifi.where()).read_text() + (ROOT / "certs" / "geant-tls-rsa-1.pem").read_text())
+    return str(path)
+
+
+def usal(prefs: dict) -> list[Offer]:
+    """Ofertas de empleo y convocatorias de prácticas vigentes del servicio de empleo de la USAL (SIPPE).
+    Para postular hay que entrar en e-SIPPE con la cuenta de estudiante."""
+    offers = []
+    for kind, url in USAL_FEEDS.items():
+        r = requests.get(url, headers=UA, timeout=30, verify=_usal_ca_bundle())
+        r.raise_for_status()
+        for item in ET.fromstring(r.content).iter("item"):
+            link = item.findtext("link", "")
+            match = USAL_ID.search(link)
+            if not match:
+                continue
+            path = "trabajo/oferta" if kind == "empleo" else "practicas/convocatorias-practicas"  # el RSS de prácticas trae el link roto
+            offers.append(Offer(
+                source="usal",
+                external_id=f"{kind}-{match.group(1)}",
+                title=strip_html(item.findtext("title", ""))[:200],
+                url=f"https://empleo.usal.es/{path}?id={match.group(1)}",
+                description=(f"{'Prácticas (USAL)' if kind == 'practicas' else 'Empleo (bolsa USAL)'} · "
+                             f"Publicada: {item.findtext('pubDate', 'n/d')}\n"
+                             f"{strip_html(html.unescape(item.findtext('description', '')))}")[:MAX_DESC],
+            ))
+    return offers
+
+
+# El CSV de origen se cargó sin cabecera: los nombres de columna son los valores de la primera oferta.
+# Si la Junta lo corrige, estos nombres cambian y la fuente avisa del error (no inventa datos).
+ECYL_API = "https://analisis.datosabiertos.jcyl.es/api/explore/v2.1/catalog/datasets/ofertas-de-empleo/records"
+ECYL_FIELDS = {
+    "title": "cuidadores_de_personas_con_discapacidad_y_o_dependencia_en_instituciones",
+    "province": "burgos",
+    "town": "villalmanzo",
+    "date": "20260928",
+    "description": "p_puesto_solicitado_gerocultora_en_residencia_privada_localidad_villamanzo_burgos_se_ofrece_contrato",
+    "origin": "ecyl",
+    "id": "1285683981477",
+    "url": "https_empleo_jcyl_es_web_jcyl_empleo_es_plantilla100detalle_1284216458054_ofertasempleo_128568398147",
+}
+
+
+def ecyl(prefs: dict) -> list[Offer]:
+    """Ofertas del ECYL (y otras que publica la Junta) en tus ciudades, vía datos abiertos (se actualiza a diario)."""
+    f = ECYL_FIELDS
+    since = (datetime.now() - timedelta(days=PUBLIC_MAX_DAYS)).strftime("%Y%m%d")
+    offers = []
+    for province in prefs.get("ciudades_presencial", []):
+        for offset in range(0, 1000, 100):
+            r = requests.get(ECYL_API, params={"where": f'{f["province"]}="{province}" and `{f["date"]}` >= {since}',
+                                               "limit": 100, "offset": offset}, headers=UA, timeout=30)
+            r.raise_for_status()
+            rows = r.json().get("results", [])
+            if rows and not set(f.values()) <= set(rows[0]):
+                raise ValueError("cambió el formato del dataset de ofertas del ECYL: revisar ECYL_FIELDS")
+            for row in rows:
+                town = row[f["town"]] or row[f["province"]]
+                offers.append(Offer(
+                    source="ecyl",
+                    external_id=str(row[f["id"]]),
+                    title=f"{str(row[f['title']]).capitalize()} @ {town}",
+                    url=row[f["url"]] or "",
+                    description=(f"Ubicación: {town} ({row[f['province']]}) · Origen: {row[f['origin']]} · "
+                                 f"Publicada: {row[f['date']]}\n{strip_html(row[f['description']] or '')}")[:MAX_DESC],
+                ))
+            if len(rows) < 100:
+                break
+    return offers
+
+
 # ---------------------------------------------------------------- Alertas por correo (LinkedIn, Indeed...)
 
 # remitente → patrón del link de la oferta (el grupo 1 es el id). Si cambia el formato, ajustar aquí.
@@ -276,7 +363,7 @@ def email_alerts() -> list[Offer]:
 
 
 API_KEYS = {"adzuna": "ADZUNA_APP_ID", "infojobs": "INFOJOBS_CLIENT_ID"}
-PUBLIC_APIS = {"getonboard", "remotive", "jobicy"}
+PUBLIC_APIS = {"getonboard", "remotive", "jobicy", "usal", "ecyl"}
 
 
 def _api_turn(conn, name: str, every_hours: int) -> bool:
@@ -285,10 +372,11 @@ def _api_turn(conn, name: str, every_hours: int) -> bool:
     return db.alert_once(conn, f"fuente:{name}:{now:%Y-%m-%d}:{now.hour // every_hours}")
 
 
-def collect(prefs: dict, conn) -> tuple[list[Offer], dict[str, str]]:
+def collect(prefs: dict, conn, use_turns: bool = True) -> tuple[list[Offer], dict[str, str]]:
     """Recolecta de todas las fuentes. Devuelve (ofertas, errores por fuente).
 
     Los correos se leen en cada corrida; las APIs (con o sin clave) solo cada `cada_horas_api` horas.
+    Con use_turns=False (prueba de fuentes) se consultan todas sin gastar el turno.
     """
     every = int(prefs.get("cada_horas_api", 6))
     fetchers = {
@@ -297,13 +385,15 @@ def collect(prefs: dict, conn) -> tuple[list[Offer], dict[str, str]]:
         "getonboard": lambda: getonboard(prefs),
         "remotive": lambda: remotive(prefs),
         "jobicy": lambda: jobicy(prefs),
+        "usal": lambda: usal(prefs),
+        "ecyl": lambda: ecyl(prefs),
         "correo": email_alerts,
     }
     offers, errors = [], {}
     for name, fetch in fetchers.items():
-        if name in API_KEYS and not (env(API_KEYS[name]) and _api_turn(conn, name, every)):
+        if name in API_KEYS and not (env(API_KEYS[name]) and (not use_turns or _api_turn(conn, name, every))):
             continue  # sin clave, o ya se consultó en este bloque de horas
-        if name in PUBLIC_APIS and not _api_turn(conn, name, every):
+        if name in PUBLIC_APIS and use_turns and not _api_turn(conn, name, every):
             continue  # APIs públicas: también cada `cada_horas_api` horas, por cortesía
         try:
             offers.extend(fetch())

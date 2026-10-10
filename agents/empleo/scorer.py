@@ -15,7 +15,8 @@ Return ONLY this JSON object:
 {
   "main_role": "<the role being hired, max 8 words>",
   "role_is_technical": <true if the job is mainly software development, data, AI/ML or automation; false for sales, support, operations, HR, teaching, annotation>,
-  "skill_match": <integer 0-10: how well the REQUIRED skills and seniority match the candidate. Unrelated stacks are 0-3>,
+  "skill_match": <integer 0-10: how well the REQUIRED skills and seniority match the candidate. Unrelated stacks are 0-3.
+                  If only the title is available, judge the title against the candidate's skills; missing details are NOT a reason for a low score>,
   "schedule": "part_time" | "full_time" | "unknown",
   "weekly_hours": <integer hours per week if stated, else null>,
   "work_mode": "remote" | "hybrid" | "onsite" | "unknown",
