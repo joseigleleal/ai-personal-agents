@@ -4,11 +4,13 @@ Como en el agente freelance, el modelo solo extrae datos; las reglas (jornada, p
 modalidad y ciudad) se aplican aquí con las preferencias de config/empleo.yaml.
 """
 from agents.freelance.scorer import _has_word
+from agents.empleo.sources import EMAIL_MARK
 from agents.freelance.sources import Offer
 from core import llm
 from core.config import env, profile_summary
 
 SCORER_SYSTEM = """You evaluate a job offer in Spain for a specific candidate. Be strict and skeptical.
+Never guess: if the offer does not state something, answer "unknown", null or false.
 Return ONLY this JSON object:
 {
   "main_role": "<the role being hired, max 8 words>",
@@ -37,9 +39,15 @@ def _same_city(city: str, cities: list[str]) -> bool:
     return any(c.lower() in city for c in cities)
 
 
-def compute_score(a: dict, prefs: dict) -> tuple[int, list[str]]:
+LOW_INFO_MAX = 8  # con solo título y ubicación no se puede saber más; que lo revise una persona
+
+
+def compute_score(a: dict, prefs: dict, low_info: bool = False) -> tuple[int, list[str]]:
     """Puntaje 0-10 y notas para el aviso (ej. jornada que excede el permiso)."""
     notes = []
+    if low_info:  # alertas por correo: lo que no aparece en el título o la ubicación, el modelo lo inventaría
+        a = {**a, "schedule": "unknown", "weekly_hours": None, "requires_unrestricted_permit": False,
+             "work_mode": a.get("work_mode") if a.get("work_mode") == "remote" else "unknown"}
     score = max(0, min(10, int(a.get("skill_match") or 0)))
     if not a.get("role_is_technical", False):
         score = min(score, 3)
@@ -79,6 +87,10 @@ def compute_score(a: dict, prefs: dict) -> tuple[int, list[str]]:
         notes.append("Pide nacionalidad UE o permiso sin restricciones")
     if a.get("red_flags"):
         score = 0
+    if low_info:
+        score = min(score, LOW_INFO_MAX)
+        notes = [n for n in notes if n != "Modalidad no indicada"]
+        notes.append("Pocos datos (alerta por correo): revisa modalidad, jornada y requisitos en el anuncio")
     return score, notes
 
 
@@ -112,6 +124,6 @@ def score(offer: Offer, profile: dict, prefs: dict, conn) -> dict | None:
         if error:
             raise error
         return None
-    value, notes = compute_score(answer, prefs)
+    value, notes = compute_score(answer, prefs, low_info=offer.description.startswith(EMAIL_MARK))
     return {"score": value, "reason": answer.get("reason", ""), "notes": notes,
             "work_mode": answer.get("work_mode", "unknown"), "schedule": answer.get("schedule", "unknown")}

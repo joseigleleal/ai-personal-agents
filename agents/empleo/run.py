@@ -58,12 +58,18 @@ def main() -> None:
     conn = db.connect()
     offers, errors = sources.collect(prefs, conn)
 
-    unique = {o.id: o for o in offers}
+    unique = {}
+    for o in offers:  # si la misma oferta aparece como recomendada y como postulada, gana "postulada"
+        unique[o.id] = o if o.applied or o.id not in unique else unique[o.id]
+    applied = [o for o in unique.values() if o.applied]
+    for o in applied:  # ya postulé: se registra (o se actualiza) y nunca se avisa
+        db.insert_offer(conn, o, status="postulada")
+        db.update_offer(conn, o.id, status="postulada")
     new = [o for o in unique.values() if not db.offer_exists(conn, o.id)]
     by_source = {}
     for o in new:
         by_source[o.source] = by_source.get(o.source, 0) + 1
-    print(f"Recolectadas: {len(unique)} · nuevas: {len(new)} · por fuente: {by_source}")
+    print(f"Recolectadas: {len(unique)} · nuevas: {len(new)} · ya postuladas: {len(applied)} · por fuente: {by_source}")
     for name, err in errors.items():
         print(f"  ⚠️ {name}: {err}")
     if args.solo_fuentes:

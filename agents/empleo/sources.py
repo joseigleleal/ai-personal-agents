@@ -103,10 +103,70 @@ EMAIL_SOURCES = {
     "indeed": ("indeed.com", re.compile(r"indeed\.com/(?:rc/clk|viewjob|pagead/clk)[^\s\"']*[?&]jk=([0-9a-f]+)", re.I)),
 }
 EMAIL_DAYS = 3
+EMAIL_MARK = "(Alerta por correo"  # las ofertas de correo traen pocos datos; el puntuador lo tiene en cuenta
+
+# LinkedIn, texto plano: bloques "título / empresa / ubicación / [adornos] / Ver anuncio de empleo: <url>"
+LI_SEPARATOR = re.compile(r"-{10,}")
+LI_APPLIED = re.compile(r"se ha enviado tu solicitud|your application was sent", re.I)
+LI_NOISE = re.compile(r"^(solicitar|solicitud sencilla|easy apply|promocionad|promoted|hace \d|\d+ (persona|people|alumni|solicitud|applicant)"
+                      r"|sé de los primeros|be an early|contratando activamente|actively recruiting|responde|ver anuncio|view job"
+                      r"|solicitado el|ahora sigue|descubre otros|se ha enviado|your application)", re.I)
+
+
+def _text_body(msg) -> str:
+    for part in msg.walk() if msg.is_multipart() else [msg]:
+        if part.get_content_type() == "text/plain":
+            return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace")
+    return ""
+
+
+def _linkedin_offers(msg, pattern) -> list[Offer]:
+    """Ofertas de un correo de LinkedIn con título, empresa y ubicación. Las de "se ha enviado tu solicitud"
+    se marcan como ya postuladas (no se avisan; quedan registradas)."""
+    offers = []
+    for block in LI_SEPARATOR.split(_text_body(msg)):
+        match = pattern.search(block)
+        if not match:
+            continue
+        lines = [l.strip() for l in block[:match.start()].splitlines()]
+        info = [l for l in lines if l and not LI_NOISE.search(l) and "http" not in l][-3:]
+        if not info:
+            continue
+        title, company, location = (info + ["", ""])[:3]
+        offers.append(Offer(
+            source="linkedin",
+            external_id=match.group(1),
+            title=f"{title} @ {company}".strip(" @"),
+            url=f"https://www.linkedin.com/jobs/view/{match.group(1)}",
+            description=f"{EMAIL_MARK}: solo título, empresa y ubicación)\nUbicación: {location or 'n/d'}",
+            applied=bool(LI_APPLIED.search(block)),
+        ))
+    return offers
+
+
+def _link_offers(source: str, msg, pattern) -> list[Offer]:
+    """Ofertas a partir de los links del HTML (InfoJobs, Tecnoempleo, Indeed): solo el título."""
+    parser = _LinkParser()
+    parser.feed(_html_body(msg))
+    offers, seen = [], set()
+    for href, text in parser.links:
+        match = pattern.search(href)
+        if not match or len(text) < 5 or match.group(1) in seen:
+            continue
+        seen.add(match.group(1))
+        parts = urlsplit(href)
+        offers.append(Offer(
+            source=source,
+            external_id=match.group(1),
+            title=text[:200],
+            url=f"https://{parts.netloc}{parts.path}" + (f"?{parts.query}" if source == "indeed" else ""),
+            description=f"{EMAIL_MARK}: solo título) {msg.get('Subject', '')}",
+        ))
+    return offers
 
 
 def email_alerts() -> list[Offer]:
-    """Lee los correos de alerta de los últimos días SIN marcarlos como leídos (los duplicados los frena la base)."""
+    """Lee los correos de los últimos días SIN marcarlos como leídos (los duplicados los frena la base)."""
     user, password = env("IMAP_USER"), env("IMAP_PASSWORD")
     if not user or not password:
         return []
@@ -120,24 +180,10 @@ def email_alerts() -> list[Offer]:
             for num in data[0].split():
                 _, msg_data = box.fetch(num, "(BODY.PEEK[])")
                 msg = email.message_from_bytes(msg_data[0][1])
-                parser = _LinkParser()
-                parser.feed(_html_body(msg))
-                seen = set()
-                for href, text in parser.links:
-                    match = pattern.search(href)
-                    if not match or len(text) < 5 or match.group(1) in seen:
-                        continue
-                    seen.add(match.group(1))
-                    parts = urlsplit(href)
-                    url = (f"https://www.linkedin.com/jobs/view/{match.group(1)}" if source == "linkedin"
-                           else f"https://{parts.netloc}{parts.path}" + (f"?{parts.query}" if source == "indeed" else ""))
-                    offers.append(Offer(
-                        source=source,
-                        external_id=match.group(1),
-                        title=text[:200],
-                        url=url,
-                        description=f"(Alerta por correo, solo título: {msg.get('Subject', '')}) {text}",
-                    ))
+                if source == "linkedin":
+                    offers.extend(_linkedin_offers(msg, pattern))
+                else:
+                    offers.extend(_link_offers(source, msg, pattern))
     return offers
 
 

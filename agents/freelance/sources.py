@@ -27,6 +27,7 @@ class Offer:
     url: str
     description: str
     budget: str = ""
+    applied: bool = False   # empleo: oferta a la que ya postulé (se registra, no se avisa)
 
     @property
     def id(self) -> str:
