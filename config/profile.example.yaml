@@ -1,0 +1,77 @@
+# Perfil de EJEMPLO. Copia este archivo como config/profile.yaml y complétalo con tus datos:
+#   cp config/profile.example.yaml config/profile.yaml
+# Los agentes usan profile.yaml si existe; si no, este.
+nombre: "Alex"
+titulo: "AI Engineer & Python Developer | AI Agents, Automation, Backend & Cloud"
+idiomas: ["es", "en"]
+anios_experiencia: 5
+
+# Tarifa por hora (USD) y mínimo por proyecto de precio fijo
+tarifa_hora_usd: 40
+tarifa_objetivo_usd: 60
+presupuesto_minimo_usd: 100
+
+habilidades:
+  - Python (FastAPI, Django, Flask)
+  - Automatización de procesos (APIs REST, Selenium, scraping ético)
+  - IA generativa y LLMs (RAG, prompts, tool use)
+  - Agentes de IA (agentic workflows, multiagente)
+  - Machine Learning y procesamiento de lenguaje natural
+  - Backend y microservicios (SQL, colas de mensajería, testing)
+  - Cloud y DevOps (AWS, GCP, Docker, Kubernetes)
+
+# Logros reales que la propuesta puede mencionar (el modelo nunca inventa otros).
+experiencia_destacada:
+  - "Automatización en Python que redujo una tarea operativa de 30 a 5 minutos"
+  - "Asistente con LLM y RAG para búsqueda en documentación interna"
+  - "Microservicios en Python desplegados en AWS con colas de mensajería"
+
+# Pre-filtro (gratis, antes de usar cualquier modelo). Minúsculas, palabra completa.
+# Pasa si tiene una palabra fuerte en título o descripción, o una débil en el título.
+palabras_clave:
+  - python
+  - automation
+  - automatización
+  - automatizacion
+  - llm
+  - llms
+  - openai
+  - claude
+  - ai agent
+  - ai agents
+  - agente de ia
+  - agentes de ia
+  - agentic
+  - rag
+  - chatbot
+  - machine learning
+  - scraping
+  - web scraping
+  - n8n
+  - langchain
+  - langgraph
+palabras_debiles:
+  - ai
+  - ia
+  - ml
+  - gpt
+  - data
+  - agent
+  - bot
+
+# Búsquedas que se usan en fuentes con API (Freelancer.com)
+busquedas:
+  - python automation
+  - ai agent
+  - llm
+  - machine learning python
+
+# Descartar ofertas que contengan estas palabras (minúsculas)
+excluir:
+  - wordpress
+  - unpaid
+  - sin pago
+  - equity only
+
+# Puntaje mínimo (0-10) para redactar propuesta
+umbral_propuesta: 7
