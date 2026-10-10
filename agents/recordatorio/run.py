@@ -23,7 +23,7 @@ ITEM = re.compile(r"^### \d+\. \[ \] (.+?)$(.*?)(?=^### |\Z)", re.M | re.S)
 # Palabra del título → variable del .env que lo resuelve
 DONE_WHEN_SET = {"IMAP": "IMAP_USER", "Groq": "GROQ_API_KEY", "Adzuna": "ADZUNA_APP_ID",
                  "InfoJobs API": "INFOJOBS_CLIENT_ID", "Claude API": "ANTHROPIC_API_KEY"}
-MAX_STEPS_CHARS = 1500
+MAX_STEPS_CHARS = 3000  # Telegram admite 4000 por mensaje
 
 
 def pending_items() -> list[tuple[str, str]]:
