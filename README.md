@@ -80,6 +80,7 @@ Groq necesita `GROQ_API_KEY` (gratis en console.groq.com) y sirve en servidores 
 
 Programarlo en la Mac: `./scripts/instalar_launchd.sh freelance` (cada 2 h) o `./scripts/instalar_launchd.sh fx` (cada 4 h).
 Quitarlo: `./scripts/instalar_launchd.sh <agente> desinstalar`.
+Ver qué está corriendo (agentes, reintento de Oracle, Ollama, configuración y git): `./scripts/estado.sh`.
 
 ### Agente EUR → COP
 
