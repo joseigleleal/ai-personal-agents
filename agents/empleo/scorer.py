@@ -42,8 +42,9 @@ def _same_city(city: str, cities: list[str]) -> bool:
 LOW_INFO_MAX = 8  # con solo título y ubicación no se puede saber más; que lo revise una persona
 
 
-def compute_score(a: dict, prefs: dict, low_info: bool = False) -> tuple[int, list[str]]:
-    """Puntaje 0-10 y notas para el aviso (ej. jornada que excede el permiso)."""
+def compute_score(a: dict, prefs: dict, low_info: bool = False) -> tuple[int, list[str], bool]:
+    """Puntaje 0-10, notas para el aviso y si cumple el permiso de trabajo (≤ horas máximas, parcial,
+    prácticas o jornada no indicada)."""
     notes = []
     if low_info:  # alertas por correo: lo que no aparece en el título o la ubicación, el modelo lo inventaría
         a = {**a, "schedule": "unknown", "weekly_hours": None, "requires_unrestricted_permit": False,
@@ -91,11 +92,11 @@ def compute_score(a: dict, prefs: dict, low_info: bool = False) -> tuple[int, li
         score = min(score, LOW_INFO_MAX)
         notes = [n for n in notes if n != "Modalidad no indicada"]
         notes.append("Pocos datos (alerta por correo): revisa modalidad, jornada y requisitos en el anuncio")
-    return score, notes
+    return score, notes, bool(a.get("is_internship")) or not over_limit
 
 
 def score(offer: Offer, profile: dict, prefs: dict, conn) -> dict | None:
-    """Devuelve {"score", "reason", "notes", "work_mode", "schedule"} o None si no hay puntuador disponible."""
+    """Devuelve {"score", "reason", "notes", "fits_permit", "work_mode", "schedule"} o None si no hay puntuador disponible."""
     prompt = (
         f"CANDIDATE PROFILE:\n{profile_summary(profile)}\n\n"
         f"JOB OFFER ({offer.source}):\nTitle: {offer.title}\nSalary: {offer.budget or 'n/a'}\n"
@@ -124,6 +125,6 @@ def score(offer: Offer, profile: dict, prefs: dict, conn) -> dict | None:
         if error:
             raise error
         return None
-    value, notes = compute_score(answer, prefs, low_info=offer.description.startswith(EMAIL_MARK))
-    return {"score": value, "reason": answer.get("reason", ""), "notes": notes,
+    value, notes, fits_permit = compute_score(answer, prefs, low_info=offer.description.startswith(EMAIL_MARK))
+    return {"score": value, "reason": answer.get("reason", ""), "notes": notes, "fits_permit": fits_permit,
             "work_mode": answer.get("work_mode", "unknown"), "schedule": answer.get("schedule", "unknown")}

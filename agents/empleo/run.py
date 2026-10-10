@@ -15,6 +15,8 @@ from core.config import REPORTS_DIR, load_config, load_profile
 
 MODES = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial", "unknown": "Modalidad n/d"}
 SCHEDULES = {"part_time": "Parcial", "full_time": "Completa", "unknown": "Jornada n/d"}
+# Primero las que caben en el permiso de trabajo; después las que lo exceden pero encajan con tu perfil
+LABELS = {True: "✅ Cumple tu permiso", False: "🟡 Excede tu permiso, pero encaja"}
 
 
 def write_report(entries: list[dict], errors: dict) -> str:
@@ -25,22 +27,29 @@ def write_report(entries: list[dict], errors: dict) -> str:
     lines += [f"- ⚠️ Fuente `{name}` falló: {err}" for name, err in errors.items()]
     if not entries:
         lines.append("\nSin ofertas nuevas sobre el umbral.\n")
-    for e in entries:
-        lines.append(f"\n### [{e['score']}/10] {e['title']}")
-        lines.append(f"- {MODES[e['work_mode']]} · {SCHEDULES[e['schedule']]} · Salario: {e['budget'] or 'n/d'}"
-                     f" · Fuente: {e['source']}")
-        lines.append(f"- Link: {e['url']}")
-        lines.append(f"- Por qué: {e['reason']}")
-        lines += [f"- {n}" for n in e["notes"]]
+    for fits in (True, False):
+        group = [e for e in entries if e["fits_permit"] == fits]
+        if group:
+            lines.append(f"\n**{LABELS[fits]} ({len(group)})**")
+        for e in group:
+            lines += _report_entry(e)
     with open(path, "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return str(path)
 
 
+def _report_entry(e: dict) -> list[str]:
+    return [f"\n### [{e['score']}/10] {e['title']}",
+            f"- {MODES[e['work_mode']]} · {SCHEDULES[e['schedule']]} · Salario: {e['budget'] or 'n/d'} · Fuente: {e['source']}",
+            f"- Link: {e['url']}",
+            f"- Por qué: {e['reason']}",
+            *[f"- {n}" for n in e["notes"]]]
+
+
 def send_alerts(entries: list[dict]) -> None:
     sent = False
     for e in entries:
-        text = (f"💼 [{e['score']}/10] {e['title']}\n"
+        text = (f"{LABELS[e['fits_permit']]}\n💼 [{e['score']}/10] {e['title']}\n"
                 f"{MODES[e['work_mode']]} · {SCHEDULES[e['schedule']]} · Salario: {e['budget'] or 'n/d'}\n"
                 f"{e['reason']}\n" + "".join(f"{n}\n" for n in e["notes"]) + e["url"])
         sent = notify.telegram(text) or sent
@@ -102,7 +111,7 @@ def main() -> None:
         if result["score"] >= threshold:
             entries.append({**result, "title": o.title, "url": o.url, "source": o.source, "budget": o.budget})
 
-    entries.sort(key=lambda e: e["score"], reverse=True)
+    entries.sort(key=lambda e: (not e["fits_permit"], -e["score"]))  # primero las que cumplen el permiso
     print(f"Reporte: {write_report(entries, errors)}")
     if entries:
         send_alerts(entries[: prefs.get("max_avisos_por_corrida", 10)])  # el reporte las tiene todas
