@@ -25,8 +25,8 @@ programador (launchd en Mac / systemd en servidor)
 | Avisos | Bot de Telegram (y notificación de macOS en la Mac) |
 | Programación | `launchd` en la Mac · timers de `systemd` en el servidor |
 | Servidor | Oracle Cloud Always Free (Ubuntu 24.04) |
-| Despliegue | Repo privado en GitHub: un `git push` actualiza el servidor en la siguiente corrida |
-| Configuración | `.env` (secretos, nunca en git) y `config/profile.yaml` (perfil profesional) |
+| Despliegue | Repo público en GitHub: un `git push` actualiza el servidor en la siguiente corrida |
+| Configuración | `.env` (secretos) y `config/profile.yaml` (perfil profesional), ambos solo locales y fuera de git |
 
 **Agentes actuales**
 
@@ -61,6 +61,7 @@ data/                 base de datos, reportes y logs (no se comparte)
 cd ~/Desktop/personal-agents
 cp .env.example .env            # por defecto todo gratis con Ollama
 cp config/profile.example.yaml config/profile.yaml   # y completarlo con tu perfil
+git config core.hooksPath scripts/hooks   # revisión antes de cada commit (ver "Repo público")
 ollama pull qwen3:8b            # modelo local para puntuar y redactar (~5 GB)
 ollama serve                    # si no está corriendo ya (o abrir la app de Ollama)
 
@@ -97,9 +98,10 @@ Las tasas de las apps (Global66, bancos) se registran a mano: Global66 no tiene 
 nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 GB) y a1 (ARM, Ollama)
 
 # En el servidor (Ubuntu 24.04). Con menos de 8 GB de RAM no instala Ollama y deja los backends en groq
-git clone git@github.com:<usuario>/personal-agents.git ~/personal-agents
+git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
 cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa los timers (freelance 2 h, fx 4 h)
-nano .env                                   # completar Telegram, correo, etc.
+nano .env                                   # completar Telegram, correo, etc. (o copiarlo con scp)
+# y copiar el perfil real desde la Mac: scp config/profile.yaml ubuntu@<ip>:~/personal-agents/config/
 sudo systemctl start agentic-freelance.service && journalctl -u agentic-freelance.service -f
 ```
 
@@ -118,3 +120,11 @@ Para actualizar el servidor basta con hacer `git push` desde la Mac: en cada cor
 - Nada de scraping de Upwork/Workana: solo alertas por correo y APIs oficiales.
 - El agente se detiene al llegar a `MONTHLY_BUDGET_USD`.
 - `.env` y `data/` nunca se comparten.
+
+## Repo público
+
+Este repo es público y se trabaja directo en él. Los datos personales viven solo en la máquina:
+`.env`, `config/profile.yaml` y `data/` están en `.gitignore`.
+El hook `scripts/hooks/pre-commit` revisa cada commit y lo cancela si encuentra archivos privados o algo
+que parezca un secreto (claves de API, tokens de Telegram, llaves privadas, correos). Para frenar también
+nombres propios (empleadores, clientes), agregarlos uno por línea en `.secret-patterns` (archivo local, no se sube).

@@ -1,6 +1,11 @@
+# Secretos y datos locales: nunca en git
 .env
-.venv/
-__pycache__/
+config/profile.yaml
 data/
 *.log
+
+# Entorno y editores
+.venv/
+__pycache__/
+.idea/
 .DS_Store

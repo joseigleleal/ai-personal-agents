@@ -1,0 +1,32 @@
+#!/bin/bash
+# Revisión antes de cada commit (el repo es público): frena si se cuela un secreto o un dato personal.
+# Se activa una vez con:  git config core.hooksPath scripts/hooks
+# Patrones extra privados (nombres de empleadores, clientes, etc.): uno por línea en .secret-patterns,
+# archivo local que nunca se sube.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+FORBIDDEN='^(\.env|config/profile\.yaml|memoria\.md|CLAUDE\.md|\.secret-patterns|data/)'
+PATTERNS='sk-ant-[A-Za-z0-9]|gsk_[A-Za-z0-9]{10}|BEGIN [A-Z ]*PRIVATE KEY|@gmail\.com|ocid1\.(tenancy|user)\.|[0-9]{8,10}:[A-Za-z0-9_-]{35}'
+
+files="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$files" ] && exit 0
+
+if bad="$(grep -E "$FORBIDDEN" <<<"$files")"; then
+  echo "ERROR: estos archivos son privados y no pueden ir al repo público:"; echo "$bad"; exit 1
+fi
+
+extra=()
+[ -f "$ROOT/.secret-patterns" ] && extra=(-f "$ROOT/.secret-patterns")
+
+found=0
+while IFS= read -r f; do
+  content="$(git show ":$f" 2>/dev/null)" || continue
+  if grep -qIiE "$PATTERNS" <<<"$content" || { [ ${#extra[@]} -gt 0 ] && grep -qIiF "${extra[@]}" <<<"$content"; }; then
+    echo "  $f"; found=1
+  fi
+done <<<"$files"
+
+if [ "$found" = 1 ]; then
+  echo "ERROR: los archivos de arriba parecen tener secretos o datos personales. Commit cancelado."; exit 1
+fi
