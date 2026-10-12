@@ -100,7 +100,7 @@ def summary(a: dict, margins: dict[str, float], amount_eur: float, cross: float 
 
 def send(text: str, title: str) -> None:
     print(text)
-    if not notify.telegram(text):
+    if not notify.telegram(text, "fx"):
         notify.macos(title, text.splitlines()[0])
 
 

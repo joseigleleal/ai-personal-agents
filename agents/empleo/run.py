@@ -52,7 +52,7 @@ def send_alerts(entries: list[dict]) -> None:
         text = (f"{LABELS[e['fits_permit']]}\n💼 [{e['score']}/10] {e['title']}\n"
                 f"{MODES[e['work_mode']]} · {SCHEDULES[e['schedule']]} · Salario: {e['budget'] or 'n/d'}\n"
                 f"{e['reason']}\n" + "".join(f"{n}\n" for n in e["notes"]) + e["url"])
-        sent = notify.telegram(text) or sent
+        sent = notify.telegram(text, "empleo") or sent
     if not sent:
         notify.macos("Agente empleo", f"{len(entries)} ofertas de empleo para revisar")
 

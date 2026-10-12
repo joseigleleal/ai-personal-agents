@@ -9,8 +9,11 @@ from core.config import env
 TELEGRAM_LIMIT = 4000  # Telegram corta en 4096 caracteres
 
 
-def telegram(text: str) -> bool:
-    token, chat_id = env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID")
+def telegram(text: str, agent: str | None = None) -> bool:
+    """Envía por el bot del agente (TELEGRAM_BOT_TOKEN_<AGENTE>) o, si no tiene, por el general."""
+    suffix = f"_{agent.upper()}" if agent else ""
+    token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
+    chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
     try:

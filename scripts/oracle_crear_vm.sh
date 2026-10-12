@@ -92,6 +92,9 @@ while true; do
     elif grep -qiE "TooManyRequests|429" <<<"$out"; then
       log "Intento $attempt [$name $ocpu/$mem]: demasiados pedidos, espero el doble"
       wait=$((INTERVAL * 2)); break
+    elif grep -qiE "timed out|RequestException|ServiceUnavailable|Connection(Error| reset| aborted)" <<<"$out"; then
+      log "Intento $attempt [$name $ocpu/$mem]: falla de red, reintento en la próxima vuelta"
+      break
     else
       log "Intento $attempt [$name $ocpu/$mem]: error inesperado, me detengo:"
       log "$(grep -E '"(code|message)"' <<<"$out" | tr -s ' ')"

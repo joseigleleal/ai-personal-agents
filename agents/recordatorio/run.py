@@ -67,7 +67,7 @@ def main() -> None:
     if not args.forzar and not db.alert_once(conn, f"recordatorio:{date.today()}"):
         print("Ya se envió el recordatorio de hoy.")
         return
-    if not notify.telegram(message):
+    if not notify.telegram(message, "recordatorio"):
         notify.macos("Pendientes", f"{len(items)} pendientes: {items[0][0]}")
     print(f"Recordatorio enviado: {len(items)} pendientes.")
 

@@ -38,6 +38,6 @@ def send_alerts(entries: list[dict], proposals: int) -> None:
         text = f"[{e['score']}/10] {e['title']}\n{e['url']}\nPresupuesto: {e['budget'] or 'n/d'}\n{e['reason']}"
         if e.get("proposal"):
             text += f"\n\n--- Borrador ---\n{e['proposal']}"
-        sent = notify.telegram(text) or sent
+        sent = notify.telegram(text, "freelance") or sent
     if not sent:
         notify.macos("Agente freelance", f"{len(entries)} ofertas buenas, {proposals} borradores listos")
