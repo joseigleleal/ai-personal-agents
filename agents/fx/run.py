@@ -8,8 +8,11 @@ Uso:
     python -m agents.fx.run --cotizacion global66 3720   # registra la tasa que ves en una app
 """
 import argparse
+import sys
 from datetime import date
 from statistics import mean
+
+import requests
 
 from agents.fx import sources
 from core import db, notify
@@ -112,7 +115,10 @@ def main() -> None:
     args = parser.parse_args()
 
     conn = db.connect()
-    history = sources.eurcop_history(400)
+    try:
+        history = sources.eurcop_history(400)
+    except requests.RequestException as e:
+        sys.exit(f"Fuente de tasas no disponible tras reintentar ({e.__class__.__name__}); se intenta en la próxima corrida.")
     a = analyze(history)
 
     if args.cotizacion:

@@ -7,14 +7,29 @@
 EUR/COP de mercado = TRM × EUR/USD. Es la tasa "media": las plataformas (Global66, bancos)
 venden euros algo más caros. Esa diferencia es su margen.
 """
+import time
 from datetime import date, datetime, timedelta
 
 import requests
 
 TIMEOUT = 20
+REINTENTOS = (5, 20)  # segundos de espera antes de cada reintento ante un fallo de red
 TRM_URL = "https://www.datos.gov.co/resource/32sa-8pi3.json"
 FRANKFURTER_URL = "https://api.frankfurter.dev/v1"
 ER_API_URL = "https://open.er-api.com/v6/latest/EUR"
+
+
+def _get(url: str, **params) -> requests.Response:
+    """GET con reintentos: las APIs públicas a veces tardan o cortan la conexión un momento."""
+    for wait in (*REINTENTOS, None):
+        try:
+            r = requests.get(url, params=params, timeout=TIMEOUT)
+            r.raise_for_status()
+            return r
+        except (requests.ConnectionError, requests.Timeout):
+            if wait is None:
+                raise
+            time.sleep(wait)
 
 
 def _day(value: str) -> date:
@@ -24,8 +39,7 @@ def _day(value: str) -> date:
 def trm_history(since: date) -> dict[date, float]:
     """TRM por día. Un valor cubre su rango de vigencia (fines de semana y festivos)."""
     params = {"$where": f"vigenciadesde >= '{since.isoformat()}'", "$order": "vigenciadesde ASC", "$limit": 1000}
-    r = requests.get(TRM_URL, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
+    r = _get(TRM_URL, **params)
     out = {}
     for row in r.json():
         d, until = _day(row["vigenciadesde"]), _day(row["vigenciahasta"])
@@ -37,9 +51,7 @@ def trm_history(since: date) -> dict[date, float]:
 
 def eurusd_history(since: date) -> dict[date, float]:
     """EUR/USD del BCE (solo días hábiles)."""
-    r = requests.get(f"{FRANKFURTER_URL}/{since.isoformat()}..", params={"base": "EUR", "symbols": "USD"},
-                     timeout=TIMEOUT)
-    r.raise_for_status()
+    r = _get(f"{FRANKFURTER_URL}/{since.isoformat()}..", base="EUR", symbols="USD")
     return {date.fromisoformat(d): v["USD"] for d, v in r.json()["rates"].items()}
 
 

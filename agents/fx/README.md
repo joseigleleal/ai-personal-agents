@@ -23,6 +23,8 @@ TRM (datos.gov.co) × EUR/USD (BCE) ──▶ tasa EUR→COP diaria (control cru
 - **Margen de las apps:** Global66 bloquea bots y no tiene API, así que su tasa se registra a mano
   (`--cotizacion global66 <tasa>`) y el agente calcula su margen sobre el mercado.
 - **Un aviso por señal:** la tabla `alerts_sent` evita repetir el mismo aviso.
+- **Reintentos de red:** las APIs públicas a veces tardan; cada consulta se reintenta 2 veces (a los 5 y 20 s).
+  Si sigue fallando, la corrida termina con una línea en el log (sin traceback) y lo intenta en la próxima.
 
 ## Uso
 
