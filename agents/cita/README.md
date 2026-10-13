@@ -33,7 +33,7 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   navegador a veces lo rechaza. El agente descarga el intermedio, valida la cadena completa y el nombre del
   sitio contra las raíces de confianza, y **solo entonces** le indica al navegador que acepte esa clave.
 - **Ritmo prudente.** Consultas seguidas provocan "sesión caducada" o bloqueos. Si detecta un bloqueo, pausa
-  30 min. Un candado evita dos revisiones a la vez.
+  `pausa_bloqueo_min` (15 por defecto). Un candado evita dos revisiones a la vez.
 - **Sin spam de errores.** El mismo error se avisa como máximo una vez cada 3 h; las capturas de cada paso
   quedan en `data/cita/ultima/` para diagnosticar.
 

@@ -4,6 +4,7 @@ oficina: "99"            # "99" = cualquier oficina
 tramite_policia: true    # true = lista "Trámites Policía Nacional"
 tramite: "POLICÍA-TOMA DE HUELLAS"   # basta con el inicio del nombre del trámite
 headless: false          # true lo bloquea un cortafuegos (FortiGate): dejar en false
+pausa_bloqueo_min: 15    # si el sitio rechaza el acceso, esperar estos minutos antes de reintentar
 ventana_oculta: true     # abre la ventana fuera de la pantalla para que no moleste
 
 # Datos del solicitante. Con Cl@ve el NIE y el nombre suelen venir rellenados.

@@ -346,7 +346,7 @@ def main() -> None:
                 avisar(f"✅ CITA RESERVADA\n{detalle}\nRevisa tu correo para el justificante. "
                        f"Capturas en data/cita/ultima/.", sonido=True)
             except Bloqueado as e:
-                hasta = datetime.now() + timedelta(minutes=30)
+                hasta = datetime.now() + timedelta(minutes=cfg.get("pausa_bloqueo_min", 15))
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                 flujo.foto("bloqueo")
                 avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}.")
