@@ -13,6 +13,7 @@ Uso:
 import argparse
 import base64
 import hashlib
+import os
 import random
 import re
 import socket
@@ -21,6 +22,7 @@ import subprocess
 import time
 import warnings
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import certifi
 import requests
@@ -257,7 +259,42 @@ def error_nuevo(error: str, horas: int = 3) -> bool:
     return True
 
 
-def clave_verificada(host: str) -> str:
+DOH = ("https://dns.google/resolve", "https://cloudflare-dns.com/dns-query")
+
+
+def conecta(ip: str) -> bool:
+    try:
+        socket.create_connection((ip, 443), timeout=8).close()
+        return True
+    except OSError:
+        return False
+
+
+def ip_alcanzable(host: str) -> str | None:
+    """IP de `host` que acepte conexión, o None si la del DNS local ya funciona.
+
+    El DNS de la red local puede entregar una IP del sitio (p. ej. la de una red interna o de un
+    proveedor) que deja de responder mientras la pública sigue arriba. Si pasa, se pregunta por DNS
+    sobre HTTPS y se usa la primera IP que acepte conexión.
+    """
+    locales = {a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)}
+    if any(conecta(ip) for ip in locales):
+        return None
+    for url in DOH:
+        try:
+            r = requests.get(url, params={"name": host, "type": "A"},
+                             headers={"accept": "application/dns-json"}, timeout=10)
+            ips = [a["data"] for a in r.json().get("Answer", []) if a.get("type") == 1]
+        except (requests.RequestException, ValueError):
+            continue
+        for ip in ips:
+            if ip not in locales and conecta(ip):
+                log(f"La IP del DNS local no responde; uso {ip} (DNS sobre HTTPS)")
+                return ip
+    raise ConnectionError(f"{host} no responde (ni por DNS local ni por DNS sobre HTTPS)")
+
+
+def clave_verificada(host: str, ip: str | None = None) -> str:
     """Huella SPKI (sha256, base64) del certificado de `host`, solo si su cadena completa es válida.
 
     El servidor de citas no envía el certificado intermedio y el navegador a veces no lo consigue
@@ -267,7 +304,7 @@ def clave_verificada(host: str) -> str:
     """
     lector = ssl.create_default_context()
     lector.check_hostname, lector.verify_mode = False, ssl.CERT_NONE  # solo para leerlo; se valida abajo
-    with socket.create_connection((host, 443), timeout=20) as s, \
+    with socket.create_connection((ip or host, 443), timeout=20) as s, \
             lector.wrap_socket(s, server_hostname=host) as t:
         hoja = x509.load_der_x509_certificate(t.getpeercert(binary_form=True))
     aia = hoja.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
@@ -286,7 +323,15 @@ def clave_verificada(host: str) -> str:
     return base64.b64encode(hashlib.sha256(spki).digest()).decode()
 
 
-def lanzar(p, cfg: dict):
+def fijar_ip(ip: str | None) -> None:
+    """Con client_certificates Playwright conecta desde su proceso Node, que no ve las reglas de
+    Chromium: se le precarga fijar_ip.cjs. Debe llamarse antes de sync_playwright()."""
+    if ip:
+        os.environ["CITA_FIJAR_IP"] = f"{ICP_HOST}={ip}"
+        os.environ["NODE_OPTIONS"] = f"--require {Path(__file__).with_name('fijar_ip.cjs')}"
+
+
+def lanzar(p, cfg: dict, ip: str | None):
     opciones = {"locale": "es-ES", "viewport": {"width": 1280, "height": 900}}
     cert = cfg.get("certificado") or {}
     archivo = ROOT / cert.get("archivo", "data/cita/certificado.p12")
@@ -296,7 +341,9 @@ def lanzar(p, cfg: dict):
             {"origin": o, "pfxPath": str(archivo), "passphrase": clave} for o in cert.get("origenes", [])
         ]
     # Cadena ya validada: el navegador acepta solo esa clave aunque el servidor no envíe el intermedio
-    args = [f"--ignore-certificate-errors-spki-list={clave_verificada(ICP_HOST)}"]
+    args = [f"--ignore-certificate-errors-spki-list={clave_verificada(ICP_HOST, ip)}"]
+    if ip:
+        args.append(f"--host-resolver-rules=MAP {ICP_HOST} {ip}")
     if cfg.get("ventana_oculta", True):  # el modo headless lo bloquea un cortafuegos: ventana real, fuera de vista
         args.append("--window-position=-2400,-2400")
     navegador = p.chromium.launch(headless=cfg.get("headless", False), args=args)
@@ -334,8 +381,16 @@ def main() -> None:
     for f in SHOTS.glob("*.png"):
         f.unlink()
     try:
+        try:
+            ip = ip_alcanzable(ICP_HOST)
+        except OSError as e:  # sitio caído: se avisa como cualquier error, sin abrir el navegador
+            log(str(e))
+            if error_nuevo(str(e)):
+                avisar(f"⚠️ Cita: {e}. Sigo intentando.")
+            return
+        fijar_ip(ip)
         with sync_playwright() as p:
-            navegador, contexto = lanzar(p, cfg)
+            navegador, contexto = lanzar(p, cfg, ip)
             page = contexto.new_page()
             page.on("requestfailed", lambda r: log(f"Pide certificado: {r.url.split('/')[2]}")
                     if "CLIENT_AUTH_CERT" in (r.failure or "") else None)

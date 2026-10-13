@@ -32,6 +32,12 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
 - **Cadena TLS validada por el agente.** El servidor de citas no envía su certificado intermedio y el
   navegador a veces lo rechaza. El agente descarga el intermedio, valida la cadena completa y el nombre del
   sitio contra las raíces de confianza, y **solo entonces** le indica al navegador que acepte esa clave.
+- **IP de respaldo si el DNS local falla.** El DNS de la red puede entregar una IP del sitio que deja de
+  responder mientras la IP pública sigue funcionando: el navegador solo ve "tardó demasiado en responder".
+  Antes de abrir el navegador, el agente prueba la conexión; si falla, pide la IP por DNS sobre HTTPS
+  (Google/Cloudflare) y la fija en Chromium y en el proceso Node de Playwright (`fijar_ip.cjs`), porque con
+  `client_certificates` las conexiones salen desde Node y este no respeta `--host-resolver-rules`. El
+  certificado del sitio se sigue validando igual.
 - **Ritmo prudente.** Consultas seguidas provocan "sesión caducada" o bloqueos. Si detecta un bloqueo, pausa
   `pausa_bloqueo_min` (15 por defecto). Un candado evita dos revisiones a la vez.
 - **Sesión caducada al volver de Cl@ve.** A veces el sitio pierde la sesión en ese paso; el agente lo detecta
