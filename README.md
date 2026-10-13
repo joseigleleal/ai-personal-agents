@@ -67,6 +67,16 @@ git config core.hooksPath scripts/hooks              # revisión de secretos ant
 ./scripts/instalar_launchd.sh fx                     # programarlo en la Mac
 ```
 
+**Configurar Telegram** (todos los agentes avisan por ahí):
+1. En Telegram, habla con **@BotFather** → `/newbot` → nombre y usuario (debe terminar en `bot`) → copia el token
+   a `TELEGRAM_BOT_TOKEN` en `.env`.
+2. Abre el chat de tu bot y envíale `/start`: un bot no puede escribirte hasta que tú le escribas primero.
+3. Tu `chat_id`: escríbele a **@userinfobot** (responde con tu id) → `TELEGRAM_CHAT_ID`. En chats privados es el
+   mismo para todos tus bots.
+4. Opcional, un bot por agente (separa los avisos y permite silenciar uno): crea otro bot, envíale `/start` y pon
+   `TELEGRAM_BOT_TOKEN_<AGENTE>` (ej. `TELEGRAM_BOT_TOKEN_CITA`). Si falta, el agente usa el general.
+5. Prueba: `.venv/bin/python -c "from core import notify; print(notify.telegram('hola', 'fx'))"` → `True`.
+
 **Elegir el modelo:** en `.env`, `SCORER_BACKEND` (puntuar) y `WRITER_BACKEND` (redactar) aceptan `ollama`,
 `groq` o `claude`; `*_FALLBACK` define un respaldo. Con Ollama: `ollama pull qwen3:8b` (~5 GB de RAM).
 

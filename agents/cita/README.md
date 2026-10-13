@@ -34,6 +34,11 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   sitio contra las raíces de confianza, y **solo entonces** le indica al navegador que acepte esa clave.
 - **Ritmo prudente.** Consultas seguidas provocan "sesión caducada" o bloqueos. Si detecta un bloqueo, pausa
   `pausa_bloqueo_min` (15 por defecto). Un candado evita dos revisiones a la vez.
+- **Código SMS por Telegram.** Al reservar, el sitio manda un SMS al teléfono de `config/cita.yaml`. El agente
+  avisa "📱 Te llegó un SMS" con sonido y espera hasta 8 min a que respondas **en el chat del bot del agente**
+  solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
+  confirma. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
+  hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
 - **Sin spam de errores.** El mismo error se avisa como máximo una vez cada 3 h; las capturas de cada paso
   quedan en `data/cita/ultima/` para diagnosticar.
 
