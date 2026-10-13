@@ -45,6 +45,7 @@ LAST_ERROR = WORK / "ultimo_error"  # para no repetir el mismo aviso de error ca
 NO_CITAS = "no hay citas disponibles"
 BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
            "intrusion prevention")
+SESION_CADUCADA = "sesión ha caducado"
 
 
 class Bloqueado(Exception):
@@ -53,6 +54,10 @@ class Bloqueado(Exception):
 
 class Inesperado(Exception):
     pass
+
+
+class SesionCaducada(Exception):
+    """El sitio perdió la sesión al volver de Cl@ve: es pasajero, se reintenta una vez."""
 
 
 def log(msg: str) -> None:
@@ -152,7 +157,13 @@ class Flujo:
         self.foto("clave")
         boton = self.page.get_by_role("button", name=re.compile("Certificado electr", re.I))
         boton.first.click()
-        self.page.wait_for_url(re.compile(r"icpplus/ac"), timeout=120_000)
+        fin = time.time() + 120
+        while "icpplus/ac" not in self.page.url:  # vuelta de Cl@ve; a veces llega con la sesión caducada
+            if "icpplus/infogenerica" in self.page.url and SESION_CADUCADA in self.texto():
+                raise SesionCaducada(self.page.url)
+            if time.time() > fin:
+                raise Inesperado(f"No volvió de Cl@ve en 120 s (quedó en {self.page.url})")
+            self.page.wait_for_timeout(1000)
         self.page.wait_for_load_state("domcontentloaded")
         self.revisar_bloqueo()
         self.foto("entrada")
@@ -330,7 +341,12 @@ def main() -> None:
                     if "CLIENT_AUTH_CERT" in (r.failure or "") else None)
             flujo = Flujo(page, cfg)
             try:
-                flujo.entrar()
+                try:
+                    flujo.entrar()
+                except SesionCaducada:
+                    log("Sesión caducada al volver de Cl@ve; reintento una vez.")
+                    flujo.foto("caducada")
+                    flujo.entrar()
                 if not flujo.hay_citas():
                     log("Sin citas disponibles.")
                     notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
