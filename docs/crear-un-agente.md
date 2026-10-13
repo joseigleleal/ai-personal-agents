@@ -46,7 +46,7 @@ config/<nombre>.yaml           # preferencias reales (privado, en .gitignore)
 
 1. Agrega el agente con su intervalo en `scripts/instalar_launchd.sh` (Mac) y, si corre en el servidor,
    en `scripts/setup_oracle.sh` (systemd).
-2. Agrégalo a la lista `AGENTS` de `scripts/estado.sh`.
+2. Agrégalo a la lista `AGENTS` de `scripts/estado.sh`, `scripts/detener.sh` y `scripts/reanudar.sh`.
 3. `./scripts/instalar_launchd.sh <nombre>` y revisa `data/<nombre>.log`.
 
 ## 5. Documentarlo

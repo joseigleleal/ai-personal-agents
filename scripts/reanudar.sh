@@ -4,7 +4,7 @@
 # Uso: ./scripts/reanudar.sh
 set -uo pipefail
 
-AGENTS=(freelance fx empleo recordatorio)
+AGENTS=(freelance fx empleo cita recordatorio)
 
 for a in "${AGENTS[@]}"; do
   plist="$HOME/Library/LaunchAgents/com.agentic.$a.plist"

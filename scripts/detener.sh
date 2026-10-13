@@ -4,8 +4,9 @@
 # vuelve a cargar los agentes; Ollama solo con ./scripts/reanudar.sh.
 # Uso: ./scripts/detener.sh
 set -uo pipefail
+cd "$(dirname "$0")/.."
 
-AGENTS=(freelance fx empleo recordatorio)
+AGENTS=(freelance fx empleo cita recordatorio)
 
 for a in "${AGENTS[@]}"; do
   if launchctl bootout "gui/$(id -u)/com.agentic.$a" 2>/dev/null; then echo "Agente $a detenido"; fi
@@ -13,6 +14,7 @@ done
 
 pkill -f run_agent.sh 2>/dev/null && echo "Corridas en curso cortadas"
 pkill -f "python.* -m agents\." 2>/dev/null
+rm -f data/cita/corriendo  # candado de cita: si se cortó a mitad, que no bloquee la próxima corrida
 
 if brew services list | grep -q "^ollama .*started"; then
   brew services stop ollama >/dev/null && echo "Ollama apagado"
