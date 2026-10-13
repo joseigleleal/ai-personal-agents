@@ -2,7 +2,7 @@
 # Programa un agente con launchd (macOS).
 # Uso:   ./scripts/instalar_launchd.sh [agente]              -> instala (por defecto: freelance)
 #        ./scripts/instalar_launchd.sh [agente] desinstalar
-# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 2 h) · recordatorio (diario, a las 9:00)
+# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 2 h) · cita (cada ~10 min) · recordatorio (diario, a las 9:00)
 set -e
 
 AGENT="${1:-freelance}"
@@ -10,8 +10,9 @@ case "$AGENT" in
   freelance) INTERVAL=7200 ;;
   fx)        INTERVAL=14400 ;;
   empleo)    INTERVAL=7200 ;;
+  cita)      INTERVAL=480 ;;   # + espera aleatoria de 0-4 min en el agente ≈ cada 10 ± 2 min
   recordatorio) HOUR=9 ;;
-  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo, recordatorio)"; exit 1 ;;
+  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo, cita, recordatorio)"; exit 1 ;;
 esac
 
 LABEL="com.agentic.$AGENT"
@@ -30,7 +31,7 @@ if [[ -n "${HOUR:-}" ]]; then   # todos los días a una hora fija
   WHEN="todos los días a las $HOUR:00"
 else
   SCHEDULE="  <key>StartInterval</key><integer>$INTERVAL</integer>"
-  WHEN="cada $((INTERVAL / 3600)) h"
+  WHEN="cada $((INTERVAL / 60)) min"
 fi
 
 mkdir -p "$PROJECT/data"

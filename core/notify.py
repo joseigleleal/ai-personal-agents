@@ -9,8 +9,11 @@ from core.config import env
 TELEGRAM_LIMIT = 4000  # Telegram corta en 4096 caracteres
 
 
-def telegram(text: str, agent: str | None = None) -> bool:
-    """Envía por el bot del agente (TELEGRAM_BOT_TOKEN_<AGENTE>) o, si no tiene, por el general."""
+def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
+    """Envía por el bot del agente (TELEGRAM_BOT_TOKEN_<AGENTE>) o, si no tiene, por el general.
+
+    silent=True: llega sin sonido ni vibración (para avisos rutinarios).
+    """
     suffix = f"_{agent.upper()}" if agent else ""
     token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
     chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
@@ -20,7 +23,8 @@ def telegram(text: str, agent: str | None = None) -> bool:
         for i in range(0, len(text), TELEGRAM_LIMIT):
             requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text[i:i + TELEGRAM_LIMIT], "disable_web_page_preview": True},
+                json={"chat_id": chat_id, "text": text[i:i + TELEGRAM_LIMIT], "disable_web_page_preview": True,
+                      "disable_notification": silent},
                 timeout=20,
             ).raise_for_status()
         return True

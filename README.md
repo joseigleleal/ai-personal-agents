@@ -1,155 +1,100 @@
 # Personal Agents
 
-Agentes autónomos de uso personal: trabajan en segundo plano y me avisan cuando hay algo que revisar.
+Agentes autónomos de uso personal: trabajan en segundo plano y avisan por Telegram cuando hay algo que
+revisar. El repo está pensado como **ejemplo para replicar**: cada agente es pequeño, se entiende en una
+lectura y comparte la misma base.
+
+## Agentes
+
+| Agente | Qué hace | Modelo de lenguaje | Frecuencia | Ficha |
+|---|---|---|---|---|
+| `cita` | Busca y reserva cita previa de extranjería (toma de huellas) entrando con certificado digital | No (navegador con Playwright) | ~10 min | [README](agents/cita/README.md) |
+| `empleo` | Junta ofertas de empleo en España, las puntúa con reglas personales y avisa las mejores | Sí, solo para extraer datos | 2 h | [README](agents/empleo/README.md) |
+| `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
+| `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
+| `recordatorio` | Envía cada mañana los pendientes de configuración y sus pasos | No | Diario 9:00 | [README](agents/recordatorio/README.md) |
+
+¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md)
 
 ## Cómo funciona
 
-Cada agente es un programa de Python que se ejecuta solo cada cierto tiempo, hace su tarea, guarda el
-resultado en una base SQLite local y avisa por Telegram si hay algo que revisar. Nunca envía ni paga nada
-por su cuenta: propone y la persona decide.
+Cada agente es un programa de Python que **hace una corrida y termina**. El sistema operativo lo repite cada
+cierto tiempo. En cada corrida hace su tarea, guarda el estado en SQLite y avisa por Telegram. Nunca envía ni
+paga nada por su cuenta: propone y la persona decide (salvo que la persona pida lo contrario, como la reserva
+de `cita`).
 
 ```
 programador (launchd en Mac / systemd en servidor)
-   └─▶ scripts/run_agent.sh <agente>   git pull + python -m agents.<agente>.run
-          └─▶ core/   config · SQLite · modelos de lenguaje · avisos
-                 └─▶ Telegram + data/reports/ + data/agentic.db
+   └─▶ scripts/run_agent.sh <agente>        git pull + python -m agents.<agente>.run
+          └─▶ agents/<agente>/run.py        la lógica propia del agente
+                 └─▶ core/                  config · SQLite · modelos de lenguaje · avisos
+                        └─▶ Telegram · data/reports/ · data/agentic.db · data/<agente>.log
 ```
-
-**Base técnica**
 
 | Pieza | Qué se usa |
 |---|---|
-| Lenguaje | Python 3.12, con entorno virtual en `.venv/` |
-| Datos | SQLite (`data/agentic.db`): ofertas, tasas, avisos enviados, costos e ingresos |
-| Modelos de lenguaje | A elección en `.env`: **Ollama** (local, gratis), **Groq** (API, plan gratis) o **Claude** (de pago, con tope mensual) |
-| Avisos | Bot de Telegram (y notificación de macOS en la Mac) |
+| Lenguaje | Python 3.12 con entorno virtual en `.venv/` |
+| Datos | SQLite (`data/agentic.db`): ofertas, tasas, avisos enviados, costos |
+| Modelos | A elección en `.env`: **Ollama** (local, gratis), **Groq** (API, plan gratis) o **Claude** (de pago, con tope mensual) |
+| Navegador | Playwright (Chromium) para sitios sin API |
+| Avisos | Bot de Telegram (uno general o uno por agente) y notificación de macOS de respaldo |
 | Programación | `launchd` en la Mac · timers de `systemd` en el servidor |
 | Servidor | Oracle Cloud Always Free (Ubuntu 24.04) |
-| Despliegue | Repo público en GitHub: un `git push` actualiza el servidor en la siguiente corrida |
-| Configuración | `.env` (secretos) y `config/profile.yaml` (perfil profesional), ambos solo locales y fuera de git |
-
-**Agentes actuales**
-
-- `freelance`: busca ofertas, las puntúa según el perfil y redacta borradores de propuesta (cada 2 h).
-- `fx`: sigue la tasa EUR → COP y avisa cuando está barata frente a los últimos 90 días (cada 4 h). No usa modelo.
-- `empleo`: busca empleo en España (Adzuna, InfoJobs y alertas por correo de LinkedIn/Indeed/Tecnoempleo) y puntúa según jornada, permiso de trabajo y modalidad (cada 2 h; las APIs cada 6 h).
-- `recordatorio`: cada día a las 9:00 envía por Telegram los pendientes de configuración abiertos y los pasos del siguiente (solo en la Mac; los lee de las notas locales).
+| Configuración | `.env` (secretos) y `config/*.yaml` (preferencias), solo locales y fuera de git |
 
 ## Estructura
 
 ```
-core/                 compartido entre agentes
-  config.py           rutas, .env y perfil
-  db.py               SQLite: ofertas, cotizaciones, avisos, costos, ingresos
-  llm.py              Ollama (local), Groq (API gratis) y Claude (API, con tope de gasto)
-  notify.py           avisos por Telegram y notificación de macOS
-agents/freelance/     agente freelance asistido
-  sources.py          fuentes: RemoteOK, Hacker News, Freelancer.com (API), alertas por correo
-  scorer.py           pre-filtro por palabras + puntuación 0-10 con el modelo elegido
-  writer.py           borrador de propuesta (en el idioma de la oferta)
-  report.py           reporte diario en data/reports/ + notificación de macOS
-  run.py              orquestador
-agents/fx/            agente de tasa EUR → COP
-  sources.py          TRM (Banco de la República) × EUR/USD (BCE) + control con open.er-api
-  run.py              percentil frente a 30/90/365 días, avisos y margen de cada app
-agents/empleo/        agente de empleo en España (sources, scorer, run)
-agents/recordatorio/  recordatorio diario de pendientes por Telegram
-config/              profile.example.yaml → profile.yaml (tu perfil) · empleo.example.yaml → empleo.yaml
-scripts/              launchd (Mac), setup y timers de systemd (Oracle), creación de la VM
-data/                 base de datos, reportes y logs (no se comparte)
+core/            compartido: config.py · db.py · llm.py · notify.py
+agents/<nombre>/ un paquete por agente: README.md (su ficha), run.py y, si hace falta, sources.py / scorer.py
+config/          *.example.yaml públicos → copiarlos a *.yaml (privados) y completarlos
+docs/            guía para crear un agente
+scripts/         launchd, estado, detener/reanudar, servidor Oracle, hook de pre-commit
+data/            base de datos, reportes, logs y certificados (nunca se sube)
 ```
 
 ## Puesta en marcha
 
 ```bash
-cd ~/Desktop/personal-agents
-cp .env.example .env            # por defecto todo gratis con Ollama
-cp config/profile.example.yaml config/profile.yaml   # y completarlo con tu perfil
-git config core.hooksPath scripts/hooks   # revisión antes de cada commit (ver "Repo público")
-ollama pull qwen3:8b            # modelo local para puntuar y redactar (~5 GB)
-ollama serve                    # si no está corriendo ya (o abrir la app de Ollama)
+git clone https://github.com/<usuario>/ai-personal-agents.git && cd ai-personal-agents
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium     # solo si usarás el agente cita
+cp .env.example .env                                 # Telegram, modelos y claves
+cp config/profile.example.yaml config/profile.yaml  # y los config/<agente>.example.yaml que uses
+git config core.hooksPath scripts/hooks              # revisión de secretos antes de cada commit
 
-.venv/bin/python -m agents.freelance.run --solo-fuentes   # prueba las fuentes
-.venv/bin/python -m agents.freelance.run --sin-propuestas  # solo puntúa
-.venv/bin/python -m agents.freelance.run                  # corrida completa
+.venv/bin/python -m agents.fx.run --resumen          # prueba rápida: debería llegar un Telegram
+./scripts/instalar_launchd.sh fx                     # programarlo en la Mac
 ```
 
-### Elegir el modelo
+**Elegir el modelo:** en `.env`, `SCORER_BACKEND` (puntuar) y `WRITER_BACKEND` (redactar) aceptan `ollama`,
+`groq` o `claude`; `*_FALLBACK` define un respaldo. Con Ollama: `ollama pull qwen3:8b` (~5 GB de RAM).
 
-En `.env`, `SCORER_BACKEND` (puntuar) y `WRITER_BACKEND` (redactar) aceptan `ollama`, `groq` o `claude`.
-`SCORER_FALLBACK` y `WRITER_FALLBACK` definen un segundo backend por si el primero no está disponible o falla.
-Groq necesita `GROQ_API_KEY` (gratis en console.groq.com) y sirve en servidores sin RAM para un modelo local.
+**Día a día en la Mac**
 
-Programarlo en la Mac: `./scripts/instalar_launchd.sh <agente>` (freelance y empleo cada 2 h, fx cada 4 h, recordatorio a diario a las 9:00).
-Quitarlo: `./scripts/instalar_launchd.sh <agente> desinstalar`.
-Ver qué está corriendo (agentes, reintento de Oracle, Ollama, configuración y git): `./scripts/estado.sh`.
-Dejar la Mac descansando (saca los agentes de launchd, corta corridas y apaga Ollama): `./scripts/detener.sh`; volver a encender: `./scripts/reanudar.sh`.
+| Comando | Para qué |
+|---|---|
+| `./scripts/estado.sh` | Qué está programado, última corrida, configuración pendiente y git |
+| `./scripts/instalar_launchd.sh <agente> [desinstalar]` | Programar o quitar un agente |
+| `./scripts/detener.sh` / `./scripts/reanudar.sh` | Pausar todo (agentes y Ollama) y volver a encenderlo |
+| `tail -f data/<agente>.log` | Ver un agente en vivo |
 
-### Agente EUR → COP
-
-```bash
-.venv/bin/python -m agents.fx.run                            # avisa solo si hay señal de compra
-.venv/bin/python -m agents.fx.run --resumen                  # resumen siempre
-.venv/bin/python -m agents.fx.run --cotizacion global66 3720 # registra la tasa que ves en la app
-```
-
-Señal: la tasa de hoy está entre el 20 % más barato de los últimos 90 días (o en su mínimo), o bajó de
-`FX_ALERTA_EUR_COP`. Cada domingo envía un resumen. No predice el futuro: compara con el historial.
-Las tasas de las apps (Global66, bancos) se registran a mano: Global66 no tiene API pública y bloquea bots.
-
-### Agente de empleo (España)
+## Servidor en Oracle Cloud (Always Free)
 
 ```bash
-cp config/empleo.example.yaml config/empleo.yaml   # ciudades, jornada, permiso de trabajo (privado, fuera de git)
-.venv/bin/python -m agents.empleo.run --solo-fuentes
-.venv/bin/python -m agents.empleo.run
-```
+# Desde la Mac: reintenta crear las VMs hasta que Oracle tenga capacidad (un pedido cada 3 min)
+nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 GB) y a1 (ARM)
 
-Fuentes: **Adzuna** (`ADZUNA_APP_ID/KEY`, gratis) e **InfoJobs** (`INFOJOBS_CLIENT_ID/SECRET`) por API oficial.
-LinkedIn, Indeed y Tecnoempleo prohíben el scraping: se crean alertas en cada portal y el agente lee esos
-correos por IMAP (sin marcarlos como leídos) en cada corrida; las APIs se consultan cada `cada_horas_api` horas para
-no pasar su límite gratis. Las habilidades salen de `profile.yaml`. Para puntuar puede usar su propio modelo:
-`EMPLEO_SCORER_BACKEND=groq` con `EMPLEO_SCORER_FALLBACK=ollama` (si Groq falla o llega a su límite, sigue con Ollama).
-
-Reglas de puntaje: remoto o híbrido/presencial solo en `ciudades_presencial`; si la jornada supera
-`permiso_trabajo.horas_max_semana` la oferta se avisa marcada ("requiere ajustar jornada"), salvo que
-`jornadas` no incluya `completa`; las prácticas suman un punto; pedir nacionalidad UE baja el puntaje.
-Nunca postula: avisa por Telegram y deja `data/reports/empleo-AAAA-MM-DD.md`.
-
-## Despliegue en Oracle Cloud (Always Free)
-
-```bash
-# Desde la Mac: reintenta crear las VMs hasta que Oracle tenga capacidad (avisa al crearlas)
-nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 GB) y a1 (ARM, Ollama)
-
-# En el servidor (Ubuntu 24.04). Con menos de 8 GB de RAM no instala Ollama y deja los backends en groq
+# En el servidor. Con menos de 8 GB de RAM no instala Ollama y deja los modelos en Groq
 git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
-cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa los timers (freelance 2 h, fx 4 h)
-nano .env                                   # completar Telegram, correo, etc. (o copiarlo con scp)
-# y copiar el perfil real desde la Mac: scp config/profile.yaml config/empleo.yaml ubuntu@<ip>:~/personal-agents/config/
-sudo systemctl start agentic-freelance.service && journalctl -u agentic-freelance.service -f
+cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa un timer por agente
 ```
 
-Para actualizar el servidor basta con hacer `git push` desde la Mac: en cada corrida hace `git pull`.
-
-## Flujo
-
-1. Recolecta ofertas de las fuentes habilitadas (las que no tienen credenciales se saltan).
-2. Descarta las ya vistas y las que no pasan el pre-filtro (gratis).
-3. El modelo elegido (Ollama, Groq o Claude) puntúa de 0 a 10 según tu perfil.
-4. Si el puntaje es >= `umbral_propuesta`, el modelo de `WRITER_BACKEND` redacta un borrador (máx. `MAX_PROPOSALS_PER_RUN`).
-5. Todo queda en `data/reports/AAAA-MM-DD.md`. **Tú revisas y envías**; el agente nunca postula solo.
-
-## Reglas
-
-- Nada de scraping de Upwork/Workana: solo alertas por correo y APIs oficiales.
-- El agente se detiene al llegar a `MONTHLY_BUDGET_USD`.
-- `.env` y `data/` nunca se comparten.
+Para actualizar el servidor basta con `git push`: en cada corrida hace `git pull`.
 
 ## Repo público
 
-Este repo es público y se trabaja directo en él. Los datos personales viven solo en la máquina:
-`.env`, `config/profile.yaml` y `data/` están en `.gitignore`.
-El hook `scripts/hooks/pre-commit` revisa cada commit y lo cancela si encuentra archivos privados o algo
-que parezca un secreto (claves de API, tokens de Telegram, llaves privadas, correos). Para frenar también
-nombres propios (empleadores, clientes), agregarlos uno por línea en `.secret-patterns` (archivo local, no se sube).
+Se trabaja directo en este repo, así que lo personal vive solo en la máquina: `.env`, `config/*.yaml`
+(salvo los `.example`) y `data/` están en `.gitignore`. El hook `scripts/hooks/pre-commit` cancela el commit
+si encuentra archivos privados o algo que parezca un secreto (claves de API, tokens, llaves privadas,
+correos). Para frenar también nombres propios, agrégalos uno por línea en `.secret-patterns` (local).

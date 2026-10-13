@@ -6,14 +6,19 @@
 # Uso:  ./scripts/oracle_crear_vm.sh [micro] [a1]   (por defecto: micro a1)
 #       nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   (en segundo plano)
 #   micro: VM.Standard.E2.1.Micro (AMD, 1 GB) "agents-micro", para agentes sin modelo local o con Groq.
-#   a1:    VM.Standard.A1.Flex (ARM, 4/24 o 2/12) "personal-agents", para Ollama.
+#   a1:    VM.Standard.A1.Flex (ARM, 4/24, 2/12 o 1/6) "personal-agents", para Ollama.
+#          1/6 sale antes (Oracle reparte la capacidad en trozos chicos); luego se puede agrandar a 4/24
+#          desde la consola (Editar → Shape), gratis mientras no pase de 4 OCPU / 24 GB.
+# Ritmo: un pedido cada PAUSE segundos rotando configuraciones y fault domains (Madrid tiene un solo AD
+# y 3 fault domains). Pedir en ráfagas provoca "Too many requests" y frena todo.
 set -uo pipefail
 export PYTHONWARNINGS=ignore SUPPRESS_LABEL_WARNING=True
 
 SUBNET_NAME="public subnet-vcn-agents"
 SSH_PUB="$HOME/.ssh/oracle_agents.pub"
-PAUSE=60              # segundos entre pedidos
-INTERVAL=300          # segundos entre rondas
+PAUSE=180             # segundos entre pedidos (~20 por hora, por debajo del límite de Oracle)
+BACKOFF=360           # espera extra si Oracle responde "Too many requests"
+FAULT_DOMAINS=(FAULT-DOMAIN-1 FAULT-DOMAIN-2 FAULT-DOMAIN-3)
 LOG="$(cd "$(dirname "$0")/.." && pwd)/data/oracle_vm.log"
 
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
@@ -25,7 +30,8 @@ CANDIDATES=()
 for target in "$@"; do
   case "$target" in
     micro) CANDIDATES+=("micro agents-micro VM.Standard.E2.1.Micro 1 1") ;;
-    a1)    CANDIDATES+=("a1 personal-agents VM.Standard.A1.Flex 4 24" "a1 personal-agents VM.Standard.A1.Flex 2 12") ;;
+    a1)    CANDIDATES+=("a1 personal-agents VM.Standard.A1.Flex 4 24" "a1 personal-agents VM.Standard.A1.Flex 2 12"
+                         "a1 personal-agents VM.Standard.A1.Flex 1 6") ;;
     *)     echo "Uso: $0 [micro] [a1]"; exit 1 ;;
   esac
 done
@@ -65,7 +71,6 @@ report_ip() {
 DONE=" "
 attempt=0
 while true; do
-  wait=$INTERVAL
   for c in "${CANDIDATES[@]}"; do
     read -r target name shape ocpu mem <<<"$c"
     [[ "$DONE" == *" $name "* ]] && continue
@@ -73,13 +78,14 @@ while true; do
     if [ -n "$id" ] && [ "$id" != "null" ]; then report_ip "$name" "$id"; DONE+="$name "; continue; fi
 
     attempt=$((attempt + 1))
+    fd=${FAULT_DOMAINS[$((attempt % ${#FAULT_DOMAINS[@]}))]}
     config=()
     image=$IMAGE_MICRO
     if [ "$target" = a1 ]; then
       config=(--shape-config "{\"ocpus\": $ocpu, \"memoryInGBs\": $mem}"); image=$IMAGE_A1
     fi
     out=$(oci compute instance launch \
-      --availability-domain "$AD" --compartment-id "$TENANCY" \
+      --availability-domain "$AD" --fault-domain "$fd" --compartment-id "$TENANCY" \
       --display-name "$name" --shape "$shape" ${config[@]+"${config[@]}"} \
       --image-id "$image" --subnet-id "$SUBNET" --assign-public-ip true \
       --ssh-authorized-keys-file "$SSH_PUB" \
@@ -88,13 +94,12 @@ while true; do
       log "Intento $attempt [$name $ocpu/$mem]: OK"
       report_ip "$name" "$out"; DONE+="$name "
     elif grep -qiE "capacity|InternalError" <<<"$out"; then
-      log "Intento $attempt [$name $ocpu/$mem]: sin capacidad"
+      log "Intento $attempt [$name $ocpu/$mem ${fd#FAULT-DOMAIN-}]: sin capacidad"
     elif grep -qiE "TooManyRequests|429" <<<"$out"; then
-      log "Intento $attempt [$name $ocpu/$mem]: demasiados pedidos, espero el doble"
-      wait=$((INTERVAL * 2)); break
+      log "Intento $attempt [$name $ocpu/$mem]: demasiados pedidos, espero $((BACKOFF / 60)) min más"
+      sleep "$BACKOFF"
     elif grep -qiE "timed out|RequestException|ServiceUnavailable|Connection(Error| reset| aborted)" <<<"$out"; then
-      log "Intento $attempt [$name $ocpu/$mem]: falla de red, reintento en la próxima vuelta"
-      break
+      log "Intento $attempt [$name $ocpu/$mem]: falla de red, sigo con el siguiente"
     else
       log "Intento $attempt [$name $ocpu/$mem]: error inesperado, me detengo:"
       log "$(grep -E '"(code|message)"' <<<"$out" | tr -s ' ')"
@@ -109,5 +114,4 @@ while true; do
     read -r _ name _ <<<"$c"; [[ "$DONE" == *" $name "* ]] || pending=1
   done
   if [ "$pending" = 0 ]; then log "Todas las VMs creadas."; exit 0; fi
-  sleep "$wait"
 done

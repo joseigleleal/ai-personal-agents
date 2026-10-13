@@ -1,0 +1,20 @@
+# Copiar como config/cita.yaml (fuera de git) y completar con tus datos reales.
+provincia: Madrid          # tal como aparece en la lista de provincias
+oficina: "99"            # "99" = cualquier oficina
+tramite_policia: true    # true = lista "Trámites Policía Nacional"
+tramite: "POLICÍA-TOMA DE HUELLAS"   # basta con el inicio del nombre del trámite
+headless: false          # true lo bloquea un cortafuegos (FortiGate): dejar en false
+ventana_oculta: true     # abre la ventana fuera de la pantalla para que no moleste
+
+# Datos del solicitante. Con Cl@ve el NIE y el nombre suelen venir rellenados.
+nie: ""
+nombre: ""
+pais: ""                 # tal como aparece en la lista del sitio, en mayúsculas
+telefono: ""             # móvil español, sin +34
+email: ""
+
+# Certificado exportado desde Acceso a Llaveros (.p12). Su contraseña va en .env: CITA_CERT_PASSWORD
+certificado:
+  archivo: data/cita/certificado.p12
+  origenes:              # servidores de Cl@ve que piden el certificado (el log los muestra)
+    - https://pasarela-ident.clave.gob.es

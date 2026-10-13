@@ -2,3 +2,5 @@ anthropic>=1.0
 python-dotenv>=1.0
 pyyaml>=6.0
 requests>=2.32
+playwright>=1.48
+cryptography>=42
