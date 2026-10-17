@@ -2,13 +2,15 @@
 
 **Qué hace:** revisa cada ~10 min si hay citas para la toma de huellas (TIE) en la web de cita previa
 de extranjería, entrando con certificado digital por Cl@ve. Si hay, **reserva la primera** y avisa.
+Si un paso falla, reintenta; y aprende de cada revisión (qué pasos tardan, qué botón funcionó, a qué
+horas aparecen citas) para ajustar esperas y ritmo.
 
 | | |
 |---|---|
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
-| Frecuencia | launchd cada 8 min + espera aleatoria de 0–4 min (≈ 10 ± 2 min), las 24 h |
+| Frecuencia | launchd lo lanza cada 2 min; revisa cada 8–12 min, o 2–4 min en horas intensas, las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (cada revisión) · `data/cita.log` · capturas en `data/cita/ultima/` |
+| Salidas | Telegram (cada revisión) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -40,8 +42,25 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   certificado del sitio se sigue validando igual.
 - **Ritmo prudente.** Consultas seguidas provocan "sesión caducada" o bloqueos. Si detecta un bloqueo, pausa
   `pausa_bloqueo_min` (15 por defecto). Un candado evita dos revisiones a la vez.
-- **Sesión caducada al volver de Cl@ve.** A veces el sitio pierde la sesión en ese paso; el agente lo detecta
-  al instante, reintenta una vez en la misma corrida y solo avisa si vuelve a fallar.
+- **Reintentos en dos niveles.** Cada botón tiene su tiempo de espera; si se agota, el agente reintenta ese
+  paso con más tiempo (y si la página siguiente llegó tarde, sigue). Si el paso sigue fallando (o el sitio
+  pierde la sesión al volver de Cl@ve), repite el recorrido completo con sesión nueva, hasta `reintentos`
+  veces: con espera creciente si no había citas, **sin esperar** si ya las vio. Después de pulsar
+  Confirmar no se repite nada, para no duplicar la reserva.
+- **Memoria que aprende, sin modelo de lenguaje** (`aprendizaje.py` → `data/cita/aprendizaje.json`):
+  - tiempo de espera por paso: ×1,5 tras agotarse (tope 90 s), −10 % con cada éxito (mínimo 30 s);
+  - selector que funcionó en cada botón (hay alternativas por si el sitio cambia el `id`), se prueba primero;
+  - historial de revisiones: horas en que hubo citas → en esa hora y la anterior revisa cada 2–4 min.
+  Se descartó LangGraph/LangChain aquí: es un recorrido fijo y, cuando aparecen citas, duran segundos; un
+  modelo en medio agrega demora e imprevisibilidad justo en el paso que no admite errores.
+- **Ensayo de la reserva.** Las pantallas de la reserva solo se ven cuando hay citas. `tests/test_cita.py`
+  las simula (mismos ids de campos) y recorre reserva completa, reintentos y botones alternativos con
+  Chromium sin ventana. Cuando hay citas reales, el agente guarda capturas y HTML en `data/cita/paginas/`
+  para comparar y ajustar la simulación.
+- **Aviso de pausas largas.** launchd no corre con la Mac dormida (tapa cerrada, batería). Cada arranque deja
+  un "latido"; si pasaron más de 30 min sin ninguno, avisa por Telegram al volver.
+- **Ritmo decidido por el agente.** launchd lo lanza cada 2 min, pero solo revisa cuando toca según la
+  memoria; así puede acelerar en horas intensas sin reinstalar nada.
 - **Código SMS por Telegram.** Al reservar, el sitio manda un SMS al teléfono de `config/cita.yaml`. El agente
   avisa "📱 Te llegó un SMS" con sonido y espera hasta 8 min a que respondas **en el chat del bot del agente**
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
@@ -57,6 +76,8 @@ cp config/cita.example.yaml config/cita.yaml          # completar país, teléfo
 # exportar el certificado desde Acceso a Llaveros (.p12) → data/cita/certificado.p12
 # .env: CITA_CERT_PASSWORD=...  (opcional: TELEGRAM_BOT_TOKEN_CITA para un bot propio)
 .venv/bin/python -m agents.cita.run --ya --solo-revisar   # prueba sin reservar
+.venv/bin/python -m unittest tests.test_cita -v           # ensayo de la reserva con el sitio simulado
+.venv/bin/python -m agents.cita.run --aprendizaje         # qué aprendió: fallos por paso, horas con citas
 ./scripts/instalar_launchd.sh cita                         # programarlo
 .venv/bin/python -m agents.cita.run --reiniciar            # buscar otra cita tras reservar
 ./scripts/instalar_launchd.sh cita desinstalar             # quitarlo
@@ -64,6 +85,8 @@ cp config/cita.example.yaml config/cita.yaml          # completar país, teléfo
 
 ## Límites conocidos
 
-- Las pantallas posteriores a "hay citas" se escribieron con los nombres de campos conocidos del sitio, pero
-  solo se verifican cuando aparece una cita real: si algo falla, el aviso dice "entra tú ya".
+- Las pantallas posteriores a "hay citas" se escribieron y simularon con los nombres de campos conocidos del
+  sitio, pero solo se verifican de verdad cuando aparece una cita real: si algo falla, el aviso dice
+  "entra tú ya" y el HTML queda en `data/cita/paginas/` para corregir.
+- Revisar más seguido (horas intensas) aumenta el riesgo de bloqueo del sitio; el agente pausa si lo detecta.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).

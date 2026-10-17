@@ -8,7 +8,7 @@ lectura y comparte la misma base.
 
 | Agente | Qué hace | Modelo de lenguaje | Frecuencia | Ficha |
 |---|---|---|---|---|
-| `cita` | Busca y reserva cita previa de extranjería (toma de huellas) entrando con certificado digital | No (navegador con Playwright) | ~10 min | [README](agents/cita/README.md) |
+| `cita` | Busca y reserva cita previa de extranjería (toma de huellas) entrando con certificado digital; reintenta los pasos que fallan y aprende a qué horas aparecen citas | No (navegador con Playwright) | ~10 min (2-4 en horas intensas) | [README](agents/cita/README.md) |
 | `empleo` | Junta ofertas de empleo en España, las puntúa con reglas personales (incluido el límite de horas del permiso de trabajo) y avisa las mejores. **Piloto con LangGraph** | Sí, para extraer datos y redactar notas | 2 h | [README](agents/empleo/README.md) |
 | `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
 | `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
@@ -25,7 +25,8 @@ de `cita`).
 
 ```
 programador (launchd en Mac / systemd en servidor)
-   └─▶ scripts/run_agent.sh <agente>        git pull + python -m agents.<agente>.run
+   └─▶ servidor: scripts/run_agent.sh       git pull + pip install, y luego lo mismo que la Mac
+   └─▶ Mac: python -m agents.<agente>.run   directo, con el código tal como está en la carpeta
           └─▶ agents/<agente>/run.py        la lógica propia del agente
                  └─▶ core/                  config · SQLite · modelos de lenguaje · avisos
                         └─▶ Telegram · data/reports/ · data/agentic.db · data/<agente>.log
