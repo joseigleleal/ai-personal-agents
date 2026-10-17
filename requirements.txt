@@ -4,3 +4,10 @@ pyyaml>=6.0
 requests>=2.32
 playwright>=1.48
 cryptography>=42
+# Agente empleo (piloto con LangGraph)
+langgraph>=1.2
+langgraph-checkpoint-sqlite>=3.1
+langchain-core>=1.6
+langchain-ollama>=1.1
+langchain-groq>=1.1
+langchain-anthropic>=1.7

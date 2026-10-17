@@ -3,6 +3,7 @@
 # y arranca Ollama como servicio de Homebrew.
 # Uso: ./scripts/reanudar.sh
 set -uo pipefail
+cd "$(dirname "$0")/.."
 
 AGENTS=(freelance fx empleo cita recordatorio)
 
@@ -17,4 +18,7 @@ for a in "${AGENTS[@]}"; do
 done
 
 brew services start ollama >/dev/null && echo "Ollama encendido"
+if [ -x .venv/bin/python ]; then  # empleo (LangGraph): avisa si al cargar retomará una corrida a medias
+  echo "Empleo: $(.venv/bin/python -m agents.empleo.run --estado 2>&1 | tail -1)"
+fi
 echo "Listo. Revisa el estado con ./scripts/estado.sh"

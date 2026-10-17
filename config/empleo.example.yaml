@@ -14,6 +14,15 @@ permiso_trabajo:
   horas_max_semana: 30         # vacío = sin límite
 practicas: true                # las prácticas / convenios universitarios suman un punto
 
+# Cómo pesa el permiso de trabajo (si tiene horas máximas). Cada oferta queda en un grupo:
+#   ✅ cumple (parcial, ≤ horas máx. o prácticas) · 🟢 por proyecto/freelance · 🤝 jornada negociable
+#   ❔ jornada sin indicar · 🟡 excede (jornada completa sin flexibilidad)
+priorizar_permiso: true        # ✅ +1 punto y 🟡 −1 punto
+umbral_excede: 9               # las 🟡 solo se avisan con este puntaje o más (el reporte las tiene todas)
+max_avisos_excede: 2           # y como mucho estas por corrida
+excluir_direccion: true        # tope 4 a manager, head of, director, CTO... (por el título): casi nunca son parciales
+buscar_parcial: true           # Adzuna: pasada extra solo con jornada parcial
+
 # El agente corre cada 2 h y lee las alertas por correo en cada corrida; las APIs (Adzuna, InfoJobs)
 # solo cada `cada_horas_api` horas, para no pasar su límite gratis.
 cada_horas_api: 6
@@ -52,5 +61,5 @@ excluir:
   - dependienta
   - repartidor
 
-umbral_aviso: 7                # puntaje mínimo (0-10) para avisar por Telegram
+umbral_aviso: 7                # puntaje mínimo (0-10) para avisar por Telegram (las 🟡 usan umbral_excede)
 max_avisos_por_corrida: 10

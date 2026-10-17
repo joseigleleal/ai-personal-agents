@@ -15,6 +15,10 @@ done
 pkill -f run_agent.sh 2>/dev/null && echo "Corridas en curso cortadas"
 pkill -f "python.* -m agents\." 2>/dev/null
 rm -f data/cita/corriendo  # candado de cita: si se cortó a mitad, que no bloquee la próxima corrida
+# empleo (LangGraph) guarda su estado tras cada paso: si se cortó a mitad, la próxima corrida lo retoma
+if [ -x .venv/bin/python ] && .venv/bin/python -m agents.empleo.run --estado 2>/dev/null | grep -q "a medias"; then
+  echo "Empleo quedó a medias: se retoma solo en la próxima corrida (o empieza de cero con --reiniciar)"
+fi
 
 if brew services list | grep -q "^ollama .*started"; then
   brew services stop ollama >/dev/null && echo "Ollama apagado"

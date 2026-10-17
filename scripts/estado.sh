@@ -32,6 +32,10 @@ for agent in "${AGENTS[@]}"; do
   else warn "$agent: programado, última salida con error ($code)$last · ver $log"; fi
 done
 
+if [ -x .venv/bin/python ]; then  # empleo usa LangGraph: estado guardado del grafo (corrida a medias, pendientes)
+  printf "    empleo (LangGraph): %s\n" "$(.venv/bin/python -m agents.empleo.run --estado 2>&1 | tail -1)"
+fi
+
 title "Reintento de VMs en Oracle"
 copies="$(pgrep -f "^/bin/bash ./scripts/oracle_crear_vm.sh" | while read -r p; do
   [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "1" ] && echo "$p"; done)"

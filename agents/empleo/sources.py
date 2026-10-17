@@ -29,14 +29,16 @@ def adzuna(prefs: dict) -> list[Offer]:
     wheres = list(prefs.get("ciudades_presencial", []))
     if prefs.get("remoto", True):
         wheres.append("")  # todo el país; el puntuador descarta lo presencial fuera de tus ciudades
+    # Con permiso de horas limitado, una pasada extra solo con jornada parcial (si no, la tapan las de jornada completa)
+    passes = [{}, {"part_time": 1}] if prefs.get("buscar_parcial") else [{}]
     offers = []
     for what in prefs.get("busquedas", []):
-        for where in wheres:
+        for where, extra in [(w, p) for w in wheres for p in passes]:
             query = what if where or not prefs.get("remoto") else f"{what} remoto"
             r = requests.get(
                 f"https://api.adzuna.com/v1/api/jobs/{country}/search/1",
                 params={"app_id": app_id, "app_key": app_key, "what": query, "where": where,
-                        "results_per_page": 50, "max_days_old": 3, "content-type": "application/json"},
+                        "results_per_page": 50, "max_days_old": 3, "content-type": "application/json", **extra},
                 headers=UA, timeout=30,
             )
             r.raise_for_status()
@@ -225,43 +227,33 @@ def usal(prefs: dict) -> list[Offer]:
     return offers
 
 
-# El CSV de origen se cargó sin cabecera: los nombres de columna son los valores de la primera oferta.
-# Si la Junta lo corrige, estos nombres cambian y la fuente avisa del error (no inventa datos).
+# Si la Junta cambia los nombres de las columnas, la fuente avisa del error (no inventa datos).
 ECYL_API = "https://analisis.datosabiertos.jcyl.es/api/explore/v2.1/catalog/datasets/ofertas-de-empleo/records"
-ECYL_FIELDS = {
-    "title": "cuidadores_de_personas_con_discapacidad_y_o_dependencia_en_instituciones",
-    "province": "burgos",
-    "town": "villalmanzo",
-    "date": "20260928",
-    "description": "p_puesto_solicitado_gerocultora_en_residencia_privada_localidad_villamanzo_burgos_se_ofrece_contrato",
-    "origin": "ecyl",
-    "id": "1285683981477",
-    "url": "https_empleo_jcyl_es_web_jcyl_empleo_es_plantilla100detalle_1284216458054_ofertasempleo_128568398147",
-}
+ECYL_FIELDS = {"titulo", "provincia", "localidad_asset0", "fecha_publicacion", "descripcion", "fuente_contenido",
+               "identificador", "enlace_al_contenido"}
 
 
 def ecyl(prefs: dict) -> list[Offer]:
     """Ofertas del ECYL (y otras que publica la Junta) en tus ciudades, vía datos abiertos (se actualiza a diario)."""
-    f = ECYL_FIELDS
-    since = (datetime.now() - timedelta(days=PUBLIC_MAX_DAYS)).strftime("%Y%m%d")
+    since = (datetime.now() - timedelta(days=PUBLIC_MAX_DAYS)).strftime("%Y-%m-%d")
     offers = []
     for province in prefs.get("ciudades_presencial", []):
         for offset in range(0, 1000, 100):
-            r = requests.get(ECYL_API, params={"where": f'{f["province"]}="{province}" and `{f["date"]}` >= {since}',
+            r = requests.get(ECYL_API, params={"where": f'provincia="{province}" and fecha_publicacion >= date\'{since}\'',
                                                "limit": 100, "offset": offset}, headers=UA, timeout=30)
             r.raise_for_status()
             rows = r.json().get("results", [])
-            if rows and not set(f.values()) <= set(rows[0]):
+            if rows and not ECYL_FIELDS <= set(rows[0]):
                 raise ValueError("cambió el formato del dataset de ofertas del ECYL: revisar ECYL_FIELDS")
             for row in rows:
-                town = row[f["town"]] or row[f["province"]]
+                town = row["localidad_asset0"] or row["provincia"]
                 offers.append(Offer(
                     source="ecyl",
-                    external_id=str(row[f["id"]]),
-                    title=f"{str(row[f['title']]).capitalize()} @ {town}",
-                    url=row[f["url"]] or "",
-                    description=(f"Ubicación: {town} ({row[f['province']]}) · Origen: {row[f['origin']]} · "
-                                 f"Publicada: {row[f['date']]}\n{strip_html(row[f['description']] or '')}")[:MAX_DESC],
+                    external_id=str(row["identificador"]),
+                    title=f"{str(row['titulo']).capitalize()} @ {town}",
+                    url=row["enlace_al_contenido"] or "",
+                    description=(f"Ubicación: {town} ({row['provincia']}) · Origen: {row['fuente_contenido']} · "
+                                 f"Publicada: {row['fecha_publicacion']}\n{strip_html(row['descripcion'] or '')}")[:MAX_DESC],
                 ))
             if len(rows) < 100:
                 break
@@ -347,7 +339,7 @@ def email_alerts() -> list[Offer]:
         return []
     since = (datetime.now() - timedelta(days=EMAIL_DAYS)).strftime("%d-%b-%Y")
     offers = []
-    with imaplib.IMAP4_SSL(env("IMAP_HOST", "imap.gmail.com")) as box:
+    with imaplib.IMAP4_SSL(env("IMAP_HOST", "imap.gmail.com"), timeout=60) as box:  # sin timeout puede colgarse
         box.login(user, password)
         box.select(env("IMAP_FOLDER", "INBOX"), readonly=True)
         for source, (sender, pattern) in EMAIL_SOURCES.items():

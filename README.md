@@ -9,12 +9,12 @@ lectura y comparte la misma base.
 | Agente | Qué hace | Modelo de lenguaje | Frecuencia | Ficha |
 |---|---|---|---|---|
 | `cita` | Busca y reserva cita previa de extranjería (toma de huellas) entrando con certificado digital | No (navegador con Playwright) | ~10 min | [README](agents/cita/README.md) |
-| `empleo` | Junta ofertas de empleo en España, las puntúa con reglas personales y avisa las mejores | Sí, solo para extraer datos | 2 h | [README](agents/empleo/README.md) |
+| `empleo` | Junta ofertas de empleo en España, las puntúa con reglas personales (incluido el límite de horas del permiso de trabajo) y avisa las mejores. **Piloto con LangGraph** | Sí, para extraer datos y redactar notas | 2 h | [README](agents/empleo/README.md) |
 | `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
 | `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
 | `recordatorio` | Envía cada mañana los pendientes de configuración y sus pasos | No | Diario 9:00 | [README](agents/recordatorio/README.md) |
 
-¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md)
+¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md) · [Agentes con LangChain y LangGraph](docs/langgraph.md)
 
 ## Cómo funciona
 
@@ -36,6 +36,7 @@ programador (launchd en Mac / systemd en servidor)
 | Lenguaje | Python 3.12 con entorno virtual en `.venv/` |
 | Datos | SQLite (`data/agentic.db`): ofertas, tasas, avisos enviados, costos |
 | Modelos | A elección en `.env`: **Ollama** (local, gratis), **Groq** (API, plan gratis) o **Claude** (de pago, con tope mensual) |
+| Orquestación | Python simple en casi todos; **LangGraph + LangChain** (gratis, código abierto) en `empleo`, con estado que se retoma |
 | Navegador | Playwright (Chromium) para sitios sin API |
 | Avisos | Bot de Telegram (uno general o uno por agente) y notificación de macOS de respaldo |
 | Programación | `launchd` en la Mac · timers de `systemd` en el servidor |
@@ -45,11 +46,12 @@ programador (launchd en Mac / systemd en servidor)
 ## Estructura
 
 ```
-core/            compartido: config.py · db.py · llm.py · notify.py
+core/            compartido: config.py · db.py · llm.py (modelos) · llm_lc.py (modelos vía LangChain) · notify.py
 agents/<nombre>/ un paquete por agente: README.md (su ficha), run.py y, si hace falta, sources.py / scorer.py
 config/          *.example.yaml públicos → copiarlos a *.yaml (privados) y completarlos
-docs/            guía para crear un agente
+docs/            guías: crear un agente y agentes con LangGraph
 scripts/         launchd, estado, detener/reanudar, servidor Oracle, hook de pre-commit
+tests/           pruebas sin red ni claves (.venv/bin/python -m unittest discover tests)
 data/            base de datos, reportes, logs y certificados (nunca se sube)
 ```
 
