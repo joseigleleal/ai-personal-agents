@@ -44,6 +44,9 @@ ICP_HOST = "icp.administracionelectronica.gob.es"
 ICP = f"https://{ICP_HOST}/icpplus/index.html"
 WORK = DATA_DIR / "cita"
 SHOTS = WORK / "ultima"            # capturas de la última corrida (se sobrescriben)
+VISTA = WORK / "ultima.png"        # lo último que vio el navegador (se reemplaza en cada paso)
+VISTA_TEXTO = WORK / "ultima.txt"  # su texto visible: si cambia respecto al último enviado, va por Telegram
+VISTA_ENVIADA = WORK / "ultima_enviada"  # huella del texto de la última captura enviada
 DONE = WORK / "RESERVADA"          # existe = ya hay cita: no buscar más
 PAUSE = WORK / "pausa_hasta"       # bloqueo del sitio: esperar antes de reintentar
 LOCK = WORK / "corriendo"
@@ -119,6 +122,8 @@ class Flujo:
         self.n += 1
         try:
             self.page.screenshot(path=SHOTS / f"{self.n:02d}_{nombre}.png", full_page=True)
+            shutil.copyfile(SHOTS / f"{self.n:02d}_{nombre}.png", VISTA)
+            VISTA_TEXTO.write_text(self.texto())
             (SHOTS / f"{self.n:02d}_{nombre}.html").write_text(self.page.content())
         except Exception:  # noqa: BLE001 - la captura nunca debe cortar el flujo
             pass
@@ -386,9 +391,15 @@ def lanzar(p, cfg: dict, ip: str | None):
     args = [f"--ignore-certificate-errors-spki-list={clave_verificada(ICP_HOST, ip)}"]
     if ip:
         args.append(f"--host-resolver-rules=MAP {ICP_HOST} {ip}")
-    if cfg.get("ventana_oculta", True):  # el modo headless lo bloquea un cortafuegos: ventana real, fuera de vista
+    fantasma = cfg.get("headless", True)
+    if not fantasma and cfg.get("ventana_oculta", True):  # ventana real, fuera de vista (macOS a veces la trae)
         args.append("--window-position=-2400,-2400")
-    navegador = p.chromium.launch(headless=cfg.get("headless", False), args=args)
+    # Fantasma: Chromium completo sin ventana (no el "headless shell") y con user-agent normal, porque el
+    # cortafuegos del sitio rechaza el que dice "HeadlessChrome"
+    navegador = p.chromium.launch(headless=fantasma, channel="chromium" if fantasma else None, args=args)
+    if fantasma:
+        opciones["user_agent"] = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                                  f"(KHTML, like Gecko) Chrome/{navegador.version} Safari/537.36")
     contexto = navegador.new_context(**opciones)
     return navegador, contexto
 
@@ -410,6 +421,21 @@ def nueva_pagina(contexto) -> Page:
     page.on("requestfailed", lambda r: log(f"Pide certificado: {r.url.split('/')[2]}")
             if "CLIENT_AUTH_CERT" in (r.failure or "") else None)
     return page
+
+
+def enviar_vista_si_cambio() -> None:
+    """Manda la última captura por Telegram solo si su texto cambió desde la última enviada.
+    Se compara el texto y no la imagen: dos capturas de la misma página casi nunca son idénticas byte a byte.
+    Los números largos (IDs de soporte, marcas de tiempo) se ignoran para no reenviar la misma página."""
+    if not VISTA.exists() or not VISTA_TEXTO.exists():
+        return
+    texto = re.sub(r"\d{5,}", "#", " ".join(VISTA_TEXTO.read_text().split()))
+    huella = hashlib.sha256(texto.encode()).hexdigest()
+    if VISTA_ENVIADA.exists() and VISTA_ENVIADA.read_text() == huella:
+        return
+    if notify.telegram_foto(VISTA, f"🖼️ {datetime.now():%H:%M} Cita: cambió lo que ve el navegador.", "cita"):
+        VISTA_ENVIADA.write_text(huella)
+        log("Captura nueva enviada por Telegram.")
 
 
 def guardar_paginas() -> None:
@@ -509,7 +535,8 @@ def main() -> None:
     mem.guardar()
     for f in SHOTS.glob("*.*"):
         f.unlink()
-    log("Revisión")
+    VISTA_TEXTO.unlink(missing_ok=True)  # si esta corrida no llega a capturar, no se reenvía la anterior
+    log("Revisión" + (" (modo fantasma, sin ventana)" if cfg.get("headless", True) else " (con ventana)"))
     try:
         try:
             ip = ip_alcanzable(ICP_HOST)
@@ -542,6 +569,7 @@ def main() -> None:
             finally:
                 contexto.close()
                 navegador.close()
+                enviar_vista_si_cambio()
     finally:
         if not PAUSE.exists() or datetime.now() >= datetime.fromisoformat(PAUSE.read_text().strip()):
             log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M}")

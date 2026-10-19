@@ -3,9 +3,9 @@ provincia: Madrid          # tal como aparece en la lista de provincias
 oficina: "99"            # "99" = cualquier oficina
 tramite_policia: true    # true = lista "Trámites Policía Nacional"
 tramite: "POLICÍA-TOMA DE HUELLAS"   # basta con el inicio del nombre del trámite
-headless: false          # true lo bloquea un cortafuegos (FortiGate): dejar en false
+headless: true           # modo fantasma: sin ventana (false = ventana real)
 pausa_bloqueo_min: 15    # si el sitio rechaza el acceso, esperar estos minutos antes de reintentar
-ventana_oculta: true     # abre la ventana fuera de la pantalla para que no moleste
+ventana_oculta: true     # solo con headless: false: abre la ventana fuera de la pantalla
 
 # Ritmo (launchd lanza el agente cada 2 min y el agente decide si toca revisar)
 intervalo_min: [8, 12]          # minutos entre revisiones, al azar dentro del rango

@@ -105,8 +105,9 @@ class SitioSimulado(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.enviados = {}
-        for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("DONE", self.tmp / "RESERVADA"),
-                              ("PAGINAS", self.tmp / "paginas")):
+        for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("VISTA", self.tmp / "ultima.png"),
+                              ("VISTA_TEXTO", self.tmp / "ultima.txt"), ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
+                              ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -179,6 +180,14 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(e.exception.paso, "confirmar")
         self.assertFalse(run.DONE.exists())
         self.esperar_codigo_telegram.assert_called_once()  # un solo intento de reserva
+
+    def test_captura_solo_si_cambia(self):
+        run.VISTA.write_bytes(b"png")
+        with mock.patch.object(run.notify, "telegram_foto", return_value=True) as foto:
+            for texto in ("No hay citas. ID 123456", "No hay  citas. ID 987654", "Hay citas"):
+                run.VISTA_TEXTO.write_text(texto)
+                run.enviar_vista_si_cambio()
+        self.assertEqual(foto.call_count, 2)  # el segundo es igual salvo espacios y el ID largo
 
 
 if __name__ == "__main__":

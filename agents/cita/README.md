@@ -10,7 +10,7 @@ horas aparecen citas) para ajustar esperas y ritmo.
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
 | Frecuencia | launchd lo lanza cada 2 min; revisa cada 8–12 min, o 2–4 min en horas intensas, las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (cada revisión) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · memoria `data/cita/aprendizaje.json` |
+| Salidas | Telegram (cada revisión) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -26,8 +26,14 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
 
 ## Decisiones de diseño (y por qué)
 
-- **Navegador real, fuera de la pantalla.** En modo *headless* un cortafuegos bloquea el acceso
-  ("Intrusion Prevention"). Se usa una ventana normal ubicada fuera de la vista (`ventana_oculta: true`).
+- **Modo fantasma (sin ventana).** Usa Chromium completo en modo *headless* con un user-agent normal: el
+  cortafuegos del sitio ("Intrusion Prevention") rechaza el que dice `HeadlessChrome`, no el modo en sí. Así no
+  se abre ninguna ventana que se cruce con lo que estás haciendo. Si algún día lo bloquean, `headless: false`
+  vuelve a una ventana real ubicada fuera de la vista (`ventana_oculta: true`; macOS a veces la trae de vuelta).
+  Para ver qué está viendo, `data/cita/ultima.png` se reemplaza en cada paso con la última pantalla.
+- **Captura por Telegram solo si cambia.** Al final de cada revisión manda `ultima.png` si su texto visible es
+  distinto al de la última enviada. Se compara el texto y no la imagen (dos capturas de la misma página casi nunca
+  son idénticas byte a byte); se ignoran espacios y números largos como IDs de soporte.
 - **Certificado como archivo `.p12`.** Chrome solo elige un certificado de forma automática con políticas de
   empresa (MDM). Playwright entrega el certificado directamente (`client_certificates`) al servidor de Cl@ve
   que lo pide. El `.p12` que exporta macOS usa cifrado antiguo: se re-cifra con AES-256.

@@ -32,6 +32,25 @@ def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
         return False
 
 
+def telegram_foto(path, caption: str, agent: str | None = None, silent: bool = False) -> bool:
+    """Envía una imagen (p. ej. una captura) por el mismo bot que telegram()."""
+    suffix = f"_{agent.upper()}" if agent else ""
+    token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
+    chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    try:
+        with open(path, "rb") as f:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption[:1000], "disable_notification": silent},
+                files={"photo": f}, timeout=60,
+            ).raise_for_status()
+        return True
+    except (OSError, requests.RequestException):
+        return False
+
+
 def macos(title: str, message: str) -> None:
     if platform.system() != "Darwin":
         return
