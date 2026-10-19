@@ -1,16 +1,16 @@
 # Agente `cita` — cita previa de extranjería (toma de huellas)
 
-**Qué hace:** revisa cada ~10 min si hay citas para la toma de huellas (TIE) en la web de cita previa
+**Qué hace:** revisa cada pocos minutos (el ritmo lo aprende: de 1 a 30 min) si hay citas para la toma de huellas (TIE) en la web de cita previa
 de extranjería, entrando con certificado digital por Cl@ve. Si hay, **reserva la primera** y avisa.
 Si un paso falla, reintenta; y aprende de cada revisión (qué pasos tardan, qué botón funcionó, a qué
-horas aparecen citas) para ajustar esperas y ritmo.
+horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para ajustar esperas y ritmo.
 
 | | |
 |---|---|
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
-| Frecuencia | launchd lo lanza cada 2 min; revisa cada 8–12 min, o 2–4 min en horas intensas, las 24 h |
+| Frecuencia | launchd lo lanza cada 1 min; revisa según el ritmo aprendido (1–30 min, empieza en 10), las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (cada revisión) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · memoria `data/cita/aprendizaje.json` |
+| Salidas | Telegram (avisos; "sin citas" como mucho cada 30 min) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -31,9 +31,10 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   se abre ninguna ventana que se cruce con lo que estás haciendo. Si algún día lo bloquean, `headless: false`
   vuelve a una ventana real ubicada fuera de la vista (`ventana_oculta: true`; macOS a veces la trae de vuelta).
   Para ver qué está viendo, `data/cita/ultima.png` se reemplaza en cada paso con la última pantalla.
-- **Captura por Telegram solo si cambia.** Al final de cada revisión manda `ultima.png` si su texto visible es
-  distinto al de la última enviada. Se compara el texto y no la imagen (dos capturas de la misma página casi nunca
-  son idénticas byte a byte); se ignoran espacios y números largos como IDs de soporte.
+- **Captura por Telegram solo si cambia.** Al final de cada revisión manda `ultima.png` si el resultado es
+  distinto al de la última enviada (sin citas, hay citas, error en tal paso, bloqueo). Se descartó comparar la
+  imagen o el texto: la misma página varía según el instante de la captura (el aviso "no hay citas" aparece
+  un poco después de cargar), y eso reenviaba fotos iguales.
 - **Certificado como archivo `.p12`.** Chrome solo elige un certificado de forma automática con políticas de
   empresa (MDM). Playwright entrega el certificado directamente (`client_certificates`) al servidor de Cl@ve
   que lo pide. El `.p12` que exporta macOS usa cifrado antiguo: se re-cifra con AES-256.
@@ -46,8 +47,14 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   (Google/Cloudflare) y la fija en Chromium y en el proceso Node de Playwright (`fijar_ip.cjs`), porque con
   `client_certificates` las conexiones salen desde Node y este no respeta `--host-resolver-rules`. El
   certificado del sitio se sigue validando igual.
-- **Ritmo prudente.** Consultas seguidas provocan "sesión caducada" o bloqueos. Si detecta un bloqueo, pausa
-  `pausa_bloqueo_min` (15 por defecto). Un candado evita dos revisiones a la vez.
+- **Ritmo aprendido.** Las citas que otros cancelan se liberan en cualquier momento y duran poco, así que
+  conviene revisar seguido; pero consultar demasiado provoca bloqueos, y el sitio no publica su límite. El
+  agente lo busca solo, como el control de congestión de TCP: cada revisión sin problemas acorta el
+  intervalo 30 s (hasta 1 min); un error del sitio lo alarga ×1,5 (a veces se cae solo) y un bloqueo ×2.
+  El intervalo al que hubo un bloqueo queda como **piso** (+25 %) durante 7 días; al caducar, vuelve a
+  probar. Tras un bloqueo pausa `pausa_bloqueo_min` (15 por defecto), y si al volver lo bloquean otra vez,
+  la siguiente pausa dura el doble (tope 4 h). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
+  candado evita dos revisiones a la vez.
 - **Reintentos en dos niveles.** Cada botón tiene su tiempo de espera; si se agota, el agente reintenta ese
   paso con más tiempo (y si la página siguiente llegó tarde, sigue). Si el paso sigue fallando (o el sitio
   pierde la sesión al volver de Cl@ve), repite el recorrido completo con sesión nueva, hasta `reintentos`
@@ -56,7 +63,9 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
 - **Memoria que aprende, sin modelo de lenguaje** (`aprendizaje.py` → `data/cita/aprendizaje.json`):
   - tiempo de espera por paso: ×1,5 tras agotarse (tope 90 s), −10 % con cada éxito (mínimo 30 s);
   - selector que funcionó en cada botón (hay alternativas por si el sitio cambia el `id`), se prueba primero;
-  - historial de revisiones: horas en que hubo citas → en esa hora y la anterior revisa cada 2–4 min.
+  - ritmo entre revisiones, piso por bloqueos y pausa (ver "Ritmo aprendido");
+  - historial de revisiones: horas en que hubo citas → en esa hora y la anterior revisa al doble de ritmo,
+    sin bajar del mínimo ni del piso.
   Se descartó LangGraph/LangChain aquí: es un recorrido fijo y, cuando aparecen citas, duran segundos; un
   modelo en medio agrega demora e imprevisibilidad justo en el paso que no admite errores.
 - **Ensayo de la reserva.** Las pantallas de la reserva solo se ven cuando hay citas. `tests/test_cita.py`
@@ -65,8 +74,10 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   para comparar y ajustar la simulación.
 - **Aviso de pausas largas.** launchd no corre con la Mac dormida (tapa cerrada, batería). Cada arranque deja
   un "latido"; si pasaron más de 30 min sin ninguno, avisa por Telegram al volver.
-- **Ritmo decidido por el agente.** launchd lo lanza cada 2 min, pero solo revisa cuando toca según la
-  memoria; así puede acelerar en horas intensas sin reinstalar nada.
+- **Ritmo decidido por el agente.** launchd lo lanza cada 1 min, pero solo revisa cuando toca según la
+  memoria; así puede acelerar o frenar sin reinstalar nada.
+- **Avisos "sin citas" espaciados.** Con revisiones cada 1-2 min, avisar cada una sería ruido: el ⏳ sale
+  como mucho cada `aviso_sin_citas_min` (30 por defecto; 0 = en cada revisión) e indica el ritmo actual.
 - **Código SMS por Telegram.** Al reservar, el sitio manda un SMS al teléfono de `config/cita.yaml`. El agente
   avisa "📱 Te llegó un SMS" con sonido y espera hasta 8 min a que respondas **en el chat del bot del agente**
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
@@ -83,7 +94,7 @@ cp config/cita.example.yaml config/cita.yaml          # completar país, teléfo
 # .env: CITA_CERT_PASSWORD=...  (opcional: TELEGRAM_BOT_TOKEN_CITA para un bot propio)
 .venv/bin/python -m agents.cita.run --ya --solo-revisar   # prueba sin reservar
 .venv/bin/python -m unittest tests.test_cita -v           # ensayo de la reserva con el sitio simulado
-.venv/bin/python -m agents.cita.run --aprendizaje         # qué aprendió: fallos por paso, horas con citas
+.venv/bin/python -m agents.cita.run --aprendizaje         # qué aprendió: fallos por paso, horas con citas, ritmo
 ./scripts/instalar_launchd.sh cita                         # programarlo
 .venv/bin/python -m agents.cita.run --reiniciar            # buscar otra cita tras reservar
 ./scripts/instalar_launchd.sh cita desinstalar             # quitarlo
@@ -94,5 +105,6 @@ cp config/cita.example.yaml config/cita.yaml          # completar país, teléfo
 - Las pantallas posteriores a "hay citas" se escribieron y simularon con los nombres de campos conocidos del
   sitio, pero solo se verifican de verdad cuando aparece una cita real: si algo falla, el aviso dice
   "entra tú ya" y el HTML queda en `data/cita/paginas/` para corregir.
-- Revisar más seguido (horas intensas) aumenta el riesgo de bloqueo del sitio; el agente pausa si lo detecta.
+- Para encontrar el límite, el agente tiene que acercarse a él: es esperable algún bloqueo de vez en cuando
+  (cada 7 días, cuando caduca el piso). Si eso molesta, subir `ritmo.minimo_s`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).

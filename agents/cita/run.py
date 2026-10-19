@@ -45,8 +45,7 @@ ICP = f"https://{ICP_HOST}/icpplus/index.html"
 WORK = DATA_DIR / "cita"
 SHOTS = WORK / "ultima"            # capturas de la última corrida (se sobrescriben)
 VISTA = WORK / "ultima.png"        # lo último que vio el navegador (se reemplaza en cada paso)
-VISTA_TEXTO = WORK / "ultima.txt"  # su texto visible: si cambia respecto al último enviado, va por Telegram
-VISTA_ENVIADA = WORK / "ultima_enviada"  # huella del texto de la última captura enviada
+VISTA_ENVIADA = WORK / "ultima_enviada"  # resultado de la última revisión cuya captura se envió
 DONE = WORK / "RESERVADA"          # existe = ya hay cita: no buscar más
 PAUSE = WORK / "pausa_hasta"       # bloqueo del sitio: esperar antes de reintentar
 LOCK = WORK / "corriendo"
@@ -123,7 +122,6 @@ class Flujo:
         try:
             self.page.screenshot(path=SHOTS / f"{self.n:02d}_{nombre}.png", full_page=True)
             shutil.copyfile(SHOTS / f"{self.n:02d}_{nombre}.png", VISTA)
-            VISTA_TEXTO.write_text(self.texto())
             (SHOTS / f"{self.n:02d}_{nombre}.html").write_text(self.page.content())
         except Exception:  # noqa: BLE001 - la captura nunca debe cortar el flujo
             pass
@@ -404,9 +402,9 @@ def lanzar(p, cfg: dict, ip: str | None):
     return navegador, contexto
 
 
-def revisar_latido(cfg: dict) -> None:
+def revisar_latido(cfg: dict, mem: Aprendizaje) -> None:
     """Avisa si el agente estuvo mucho tiempo sin arrancar (Mac dormida, apagada o sin sesión)."""
-    limite = max(30, cfg.get("pausa_bloqueo_min", 15) + 15)
+    limite = max(30, mem.pausa_min(cfg) + 15)
     if LATIDO.exists():
         parado = (time.time() - LATIDO.stat().st_mtime) / 60
         if parado > limite:
@@ -423,19 +421,15 @@ def nueva_pagina(contexto) -> Page:
     return page
 
 
-def enviar_vista_si_cambio() -> None:
-    """Manda la última captura por Telegram solo si su texto cambió desde la última enviada.
-    Se compara el texto y no la imagen: dos capturas de la misma página casi nunca son idénticas byte a byte.
-    Los números largos (IDs de soporte, marcas de tiempo) se ignoran para no reenviar la misma página."""
-    if not VISTA.exists() or not VISTA_TEXTO.exists():
+def enviar_vista_si_cambio(estado: str) -> None:
+    """Manda la última captura por Telegram solo si el resultado cambió desde la última enviada
+    (sin citas → hay citas, error en un paso, bloqueo…). Se compara el resultado y no la imagen ni el texto:
+    la misma página varía según el instante de la captura (el aviso "no hay citas" aparece un poco después)."""
+    if not VISTA.exists() or (VISTA_ENVIADA.exists() and VISTA_ENVIADA.read_text() == estado):
         return
-    texto = re.sub(r"\d{5,}", "#", " ".join(VISTA_TEXTO.read_text().split()))
-    huella = hashlib.sha256(texto.encode()).hexdigest()
-    if VISTA_ENVIADA.exists() and VISTA_ENVIADA.read_text() == huella:
-        return
-    if notify.telegram_foto(VISTA, f"🖼️ {datetime.now():%H:%M} Cita: cambió lo que ve el navegador.", "cita"):
-        VISTA_ENVIADA.write_text(huella)
-        log("Captura nueva enviada por Telegram.")
+    if notify.telegram_foto(VISTA, f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}.", "cita"):
+        VISTA_ENVIADA.write_text(estado)
+        log(f"Captura enviada por Telegram (cambió a «{estado}»).")
 
 
 def guardar_paginas() -> None:
@@ -464,13 +458,15 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                 flujo.entrar()
                 if not flujo.hay_citas():
                     log("Sin citas disponibles." + (" (se agotaron)" if vio_citas else ""))
-                    mem.revision("sin_citas")
-                    notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
-                                    f"{cfg['provincia']}. Sigo revisando.", "cita")
+                    mem.revision("sin_citas", cfg=cfg)
+                    if mem.toca_aviso(cfg.get("aviso_sin_citas_min", 30)):
+                        notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
+                                        f"{cfg['provincia']}. Sigo revisando cada "
+                                        f"~{mem.intervalo(cfg) / 60:.1f} min.", "cita")
                     return
                 if not vio_citas:
                     vio_citas = True
-                    mem.revision("hay_citas")
+                    mem.revision("hay_citas", cfg=cfg)
                     mem.guardar()
                     avisar("🚨 ¡HAY CITAS de toma de huellas en "
                            f"{cfg['provincia']}! " + ("Entra ya a reservar." if solo_revisar
@@ -478,7 +474,7 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                 if solo_revisar:
                     return
                 detalle = flujo.reservar()
-                mem.revision("reservada")
+                mem.revision("reservada", cfg=cfg)
                 DONE.write_text(f"{datetime.now():%Y-%m-%d %H:%M}\n{detalle}\n")
                 avisar(f"✅ CITA RESERVADA\n{detalle}\nRevisa tu correo para el justificante. "
                        f"Capturas en data/cita/ultima/.", sonido=True)
@@ -520,8 +516,8 @@ def main() -> None:
             log("Ya hay una cita reservada (data/cita/RESERVADA). Usa --reiniciar para buscar otra.")
         return
     cfg = load_config("cita")
-    revisar_latido(cfg)
-    if not args.ya and not mem.toca():  # launchd lanza cada 2 min; la memoria decide el ritmo
+    revisar_latido(cfg, mem)
+    if not args.ya and not mem.toca():  # launchd lanza cada 1 min; la memoria decide el ritmo
         return
     if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
         log(f"En pausa por bloqueo del sitio hasta {PAUSE.read_text().strip()}")
@@ -535,14 +531,14 @@ def main() -> None:
     mem.guardar()
     for f in SHOTS.glob("*.*"):
         f.unlink()
-    VISTA_TEXTO.unlink(missing_ok=True)  # si esta corrida no llega a capturar, no se reenvía la anterior
+    inicio = f"{datetime.now():%Y-%m-%dT%H:%M}"
     log("Revisión" + (" (modo fantasma, sin ventana)" if cfg.get("headless", True) else " (con ventana)"))
     try:
         try:
             ip = ip_alcanzable(ICP_HOST)
         except OSError as e:  # sitio caído: se avisa como cualquier error, sin abrir el navegador
             log(str(e))
-            mem.revision("error", "conexion")
+            mem.revision("error", "conexion", cfg)
             if error_nuevo(str(e)):
                 avisar(f"⚠️ Cita: {e}. Sigo intentando.")
             return
@@ -552,16 +548,17 @@ def main() -> None:
             try:
                 recorrido(contexto, cfg, mem, args.solo_revisar)
             except Bloqueado as e:
-                hasta = datetime.now() + timedelta(minutes=cfg.get("pausa_bloqueo_min", 15))
+                mem.revision("bloqueo", cfg=cfg)  # aprende: ritmo ×2, piso de 7 días y pausa (×2 si se repite)
+                hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
-                mem.revision("bloqueo")
                 mem.programar(hasta)
-                avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}.")
+                avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M} y "
+                       f"después reviso cada ~{mem.intervalo(cfg) / 60:.0f} min.")
             except Exception as e:  # noqa: BLE001 - cualquier fallo se avisa con su captura
                 paso = getattr(e, "paso", "?")
                 url = contexto.pages[-1].url if contexto.pages else "?"
                 log(f"Error en «{paso}» ({url}): {e}")
-                mem.revision("error", paso)
+                mem.revision("error", paso, cfg)
                 if error_nuevo(str(e)):
                     avisar(f"⚠️ Cita: falló en el paso «{paso}» tras reintentar\n{url}\n"
                            f"{str(e).splitlines()[0][:300]}\n"
@@ -569,10 +566,12 @@ def main() -> None:
             finally:
                 contexto.close()
                 navegador.close()
-                enviar_vista_si_cambio()
+                r = mem.d["revisiones"][-1] if mem.d["revisiones"] else {}
+                if r.get("t", "") >= inicio:  # solo si esta corrida llegó a un resultado
+                    enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""))
     finally:
         if not PAUSE.exists() or datetime.now() >= datetime.fromisoformat(PAUSE.read_text().strip()):
-            log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M}")
+            log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min)")
         mem.guardar()
         LOCK.unlink(missing_ok=True)
 

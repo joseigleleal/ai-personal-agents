@@ -79,9 +79,40 @@ class Memoria(unittest.TestCase):
         hora = datetime.now().hour
         self.mem.d["revisiones"].append({"t": f"{datetime.now():%Y-%m-%dT%H:%M}", "r": "hay_citas"})
         self.assertEqual(self.mem.horas_intensas(), {hora, (hora - 1) % 24})
-        cuando = self.mem.programar_siguiente({})
-        self.assertLessEqual(cuando, datetime.now() + timedelta(minutes=4, seconds=1))
+        cuando = self.mem.programar_siguiente({})  # hora intensa: la mitad del ritmo inicial (10 min), ±20 %
+        self.assertLessEqual(cuando, datetime.now() + timedelta(minutes=6, seconds=1))
         self.assertFalse(self.mem.toca())
+
+    def test_ritmo_baja_con_exitos_y_sube_con_bloqueos(self):
+        for _ in range(30):
+            self.mem.revision("sin_citas")
+        self.assertEqual(self.mem.intervalo(), 60)  # 600 s - 30 × 30 s, con tope en el mínimo
+        self.mem.revision("bloqueo")
+        self.assertEqual(self.mem.intervalo(), 120)
+        self.assertEqual(self.mem.piso(), 75)  # bloqueó a 60 s: no vuelve a bajar de 75 s en 7 días
+        for _ in range(10):
+            self.mem.revision("sin_citas")
+        self.assertEqual(self.mem.intervalo(), 75)
+        self.mem.revision("error", "inicio")
+        self.assertEqual(self.mem.intervalo(), 112)
+
+    def test_pausa_se_duplica_si_bloquea_al_volver(self):
+        cfg = {"pausa_bloqueo_min": 15}
+        self.mem.revision("bloqueo", cfg=cfg)
+        self.assertEqual(self.mem.pausa_min(cfg), 15)
+        self.mem.revision("bloqueo", cfg=cfg)
+        self.assertEqual(self.mem.pausa_min(cfg), 30)
+        self.mem.revision("sin_citas", cfg=cfg)
+        self.assertEqual(self.mem.pausa_min(cfg), 15)
+
+    def test_bloqueo_viejo_caduca(self):
+        self.mem.d["ritmo"]["bloqueos"] = [{"t": "2020-01-01T10:00", "cada_s": 600}]
+        self.assertEqual(self.mem.piso(), 0)
+
+    def test_aviso_sin_citas_limitado(self):
+        self.assertTrue(self.mem.toca_aviso(30))
+        self.assertFalse(self.mem.toca_aviso(30))
+        self.assertTrue(self.mem.toca_aviso(0))
 
     def test_persiste(self):
         self.mem.revision("error", "clave")
@@ -106,7 +137,7 @@ class SitioSimulado(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.enviados = {}
         for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("VISTA", self.tmp / "ultima.png"),
-                              ("VISTA_TEXTO", self.tmp / "ultima.txt"), ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
+                              ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
                               ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
@@ -184,11 +215,9 @@ class SitioSimulado(unittest.TestCase):
     def test_captura_solo_si_cambia(self):
         run.VISTA.write_bytes(b"png")
         with mock.patch.object(run.notify, "telegram_foto", return_value=True) as foto:
-            for texto in ("No hay citas. ID 123456", "No hay  citas. ID 987654", "Hay citas"):
-                run.VISTA_TEXTO.write_text(texto)
-                run.enviar_vista_si_cambio()
-        self.assertEqual(foto.call_count, 2)  # el segundo es igual salvo espacios y el ID largo
-
+            for estado in ("sin_citas", "sin_citas", "error en «clave»", "sin_citas"):
+                run.enviar_vista_si_cambio(estado)
+        self.assertEqual(foto.call_count, 3)
 
 if __name__ == "__main__":
     unittest.main()
