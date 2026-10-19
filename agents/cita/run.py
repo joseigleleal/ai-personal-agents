@@ -450,10 +450,10 @@ def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: s
     botones, pregunta = None, ""
     if bloqueo_t:
         botones = [("✅ Sí es bloqueo", f"bloq:si:{bloqueo_t}"), ("❌ No es bloqueo", f"bloq:no:{bloqueo_t}")]
-        pregunta = "\n¿Es un bloqueo? Si no, deshago lo aprendido y sigo revisando."
+        pregunta = "\n¿Es un bloqueo? Si sí, sigo un poco más lento; si no, retomo ya. Sin tu respuesta no cambio el ritmo."
     elif error_t:
         botones = [("🚫 Fue bloqueo", f"err:si:{error_t}"), ("⚠️ Error normal", f"err:no:{error_t}")]
-        pregunta = "\n¿Fue un bloqueo encubierto? Si sí, pauso y aprendo a ir más lento."
+        pregunta = "\n¿Fue un bloqueo encubierto? Si sí, pauso y sigo un poco más lento. Sin tu respuesta no cambio el ritmo."
     texto = f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}." + pregunta
     if notify.telegram_foto(VISTA, texto, "cita", botones=botones):
         VISTA_ENVIADA.write_text(estado)
@@ -480,7 +480,7 @@ def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
             continue
         tipo, es_bloqueo, t = partes[0], partes[1] == "si", partes[2]
         if tipo == "bloq":
-            respuesta = mem.respuesta_bloqueo(t, es_bloqueo) or "Ese bloqueo ya no está en la memoria."
+            respuesta = mem.respuesta_bloqueo(t, es_bloqueo, cfg) or "Ese bloqueo ya no está en la memoria."
             if not es_bloqueo and "falsa alarma" in respuesta:
                 PAUSE.unlink(missing_ok=True)
                 mem.programar(datetime.now())
@@ -624,12 +624,12 @@ def main() -> None:
             try:
                 recorrido(contexto, cfg, mem, args.solo_revisar)
             except Bloqueado as e:
-                mem.revision("bloqueo", e.paso, cfg, frase=e.frase)  # aprende ritmo, piso, tope por hora y pausa
+                mem.revision("bloqueo", e.paso, cfg, frase=e.frase)  # pausa; el ritmo espera tu respuesta
                 hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                 mem.programar(hasta)
-                avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M} y "
-                       f"después reviso cada ~{mem.intervalo(cfg) / 60:.0f} min.")
+                avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}; "
+                       "el ritmo lo ajusto cuando me confirmes si fue un bloqueo.")
             except Exception as e:  # noqa: BLE001 - cualquier fallo se avisa con su captura
                 paso = getattr(e, "paso", "?")
                 url = contexto.pages[-1].url if contexto.pages else "?"

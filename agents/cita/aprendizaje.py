@@ -4,10 +4,12 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 - Tiempo de espera por paso: si un paso agota el tiempo, la próxima vez espera 1,5× más (tope 90 s);
   cada éxito lo baja un 10 % hacia el valor base.
 - Qué selector de cada botón funcionó la última vez, para probarlo primero.
-- Ritmo entre revisiones: cada revisión sin problemas lo acorta un poco (hasta 1 min); un error del sitio
-  lo alarga ×1,5 y un bloqueo ×2. El ritmo al que hubo un bloqueo queda como "piso" durante 7 días
-  (+25 %): no vuelve a bajar de ahí hasta que caduca, y entonces lo prueba de nuevo.
-- Consultas por hora: al bloquear, anota cuántas revisiones llevaba en la última hora; no vuelve a pasar de
+- Ritmo entre revisiones: cada revisión sin problemas lo acorta un poco (hasta 1 min). Un error o un
+  bloqueo no lo cambian por sí solos: se pregunta por Telegram y solo si confirmas que fue un bloqueo
+  lo alarga un poco (×1,25 por defecto). Mientras tanto, tras un bloqueo detectado pausa unos minutos.
+  El ritmo de un bloqueo confirmado queda como "piso" durante 7 días (+25 %): no vuelve a bajar de ahí
+  hasta que caduca, y entonces lo prueba de nuevo. Los bloqueos sin confirmar no cuentan para nada de esto.
+- Consultas por hora: en cada bloqueo confirmado, anota cuántas revisiones llevaba en la última hora; no vuelve a pasar de
   esa cantidad menos una (7 días), aunque el intervalo sea más largo que el piso.
 - Horas con bloqueos: si en una hora del día hubo 2+ bloqueos en la semana, en esa hora revisa 1,5× más lento.
 - Pausa tras un bloqueo, por tipo (la frase que lo delató): si al volver lo bloquean otra vez, la siguiente
@@ -27,7 +29,8 @@ MAX_MS = 90_000
 MAX_REVISIONES = 3000   # historial acotado (≈ 3 semanas a 1 revisión cada 10 min)
 DIAS_HORAS = 60         # citas vistas que cuentan para las horas intensas
 DIAS_PISO = 7           # cuánto se recuerda el ritmo al que hubo un bloqueo
-RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30}  # se sobrescribe con `ritmo:` del yaml
+PAUSA_MIN = 5          # pausa base tras un bloqueo (se sobrescribe con `pausa_bloqueo_min` del yaml)
+RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube_bloqueo": 1.25}  # se sobrescribe con `ritmo:` del yaml
 
 
 class Aprendizaje:
@@ -93,11 +96,12 @@ class Aprendizaje:
         return int(self.d["ritmo"].get("intervalo_s", self._limites(cfg)["inicial_s"]))
 
     def _bloqueos(self) -> list[dict]:
-        """Bloqueos de los últimos 7 días (los más viejos se olvidan para volver a probar)."""
+        """Bloqueos confirmados de los últimos 7 días (los más viejos se olvidan para volver a probar).
+        Los que esperan tu respuesta en Telegram no cuentan; los anotados antes de preguntar, sí."""
         desde = f"{datetime.now() - timedelta(days=DIAS_PISO):%Y-%m-%dT%H:%M}"
         bloqueos = [b for b in self.d["ritmo"].get("bloqueos", []) if b["t"] >= desde]
         self.d["ritmo"]["bloqueos"] = bloqueos[-50:]
-        return bloqueos
+        return [b for b in bloqueos if b.get("confirmado", True)]
 
     def piso(self) -> int:
         """Ritmo mínimo seguro: el más lento al que hubo un bloqueo en los últimos 7 días, +25 %."""
@@ -115,19 +119,22 @@ class Aprendizaje:
         cuentas = [b.get("por_hora") or self._por_hora(datetime.fromisoformat(b["t"])) for b in self._bloqueos()]
         return max(1, min(cuentas) - 1) if cuentas else None
 
-    def respuesta_bloqueo(self, t: str, es_bloqueo: bool) -> str | None:
+    def respuesta_bloqueo(self, t: str, es_bloqueo: bool, cfg: dict | None = None) -> str | None:
         """Lo que respondiste en Telegram sobre el bloqueo anotado a la hora `t`.
-        Sí: queda confirmado. No: se deshace lo aprendido (piso, tope, ritmo, pausa) y la frase en ese paso
-        se recuerda como falsa alarma. Devuelve un texto para el chat, o None si ya no está ese bloqueo."""
+        Sí: cuenta para el piso, el tope por hora y las horas con bloqueos, y el ritmo sube un poco.
+        No: se levanta la pausa y la frase en ese paso se recuerda como falsa alarma.
+        Devuelve un texto para el chat, o None si ya no está ese bloqueo."""
         ritmo = self.d["ritmo"]
         b = next((b for b in ritmo.get("bloqueos", []) if b["t"] == t), None)
         if not b:
             return None
         if es_bloqueo:
+            if b.get("confirmado"):
+                return "Ya estaba confirmado."
             b["confirmado"] = True
-            return "Confirmado: lo tengo en cuenta para el ritmo."
+            self._subir_ritmo(b["cada_s"], cfg)
+            return f"Confirmado: después de la pausa reviso cada {self.intervalo(cfg) / 60:.1f} min."
         ritmo["bloqueos"].remove(b)
-        ritmo["intervalo_s"] = b["cada_s"]
         ritmo.pop("pausa_min", None)
         falsa = {"frase": b.get("frase", "?"), "paso": b.get("paso", "?")}
         if falsa not in ritmo.setdefault("falsas_alarmas", []):
@@ -140,20 +147,21 @@ class Aprendizaje:
 
     def error_fue_bloqueo(self, t: str, cfg: dict | None = None) -> str | None:
         """Respondiste en Telegram que el error de la hora `t` (p. ej. un 500 o un paso que no carga) era un
-        bloqueo encubierto: se aprende como un bloqueo (piso, tope por hora, ritmo ×2 y pausa)."""
+        bloqueo encubierto: se aprende como un bloqueo confirmado (piso, tope por hora, ritmo un poco más
+        lento y pausa)."""
         cfg = cfg or {}
         r = next((r for r in self.d["revisiones"] if r["t"] == t and r["r"] == "error"), None)
         if not r:
             return None
         r["r"] = "bloqueo"
-        ritmo, lim = self.d["ritmo"], self._limites(cfg)
+        ritmo = self.d["ritmo"]
         frase = f"error en {r.get('paso', '?')}"
         cada = r.get("cada_s", self.intervalo(cfg))
         ritmo.setdefault("bloqueos", []).append({
             "t": t, "cada_s": cada, "frase": frase, "paso": r.get("paso", "?"),
             "por_hora": self._por_hora(datetime.fromisoformat(t)), "confirmado": True})
-        ritmo["intervalo_s"] = int(min(lim["maximo_s"], max(self.intervalo(cfg), cada * 2, self.piso())))
-        ritmo["pausa_min"], ritmo["ultima_frase"] = cfg.get("pausa_bloqueo_min", 15), frase
+        self._subir_ritmo(cada, cfg)
+        ritmo["pausa_min"], ritmo["ultima_frase"] = cfg.get("pausa_bloqueo_min", PAUSA_MIN), frase
         return (f"Aprendido como bloqueo: pauso {ritmo['pausa_min']} min y después reviso cada "
                 f"{ritmo['intervalo_s'] / 60:.1f} min.")
 
@@ -167,27 +175,33 @@ class Aprendizaje:
 
     def pausa_min(self, cfg: dict | None = None) -> int:
         """Minutos de pausa tras un bloqueo: la base de la config, o lo aprendido si se repitieron."""
-        return int(self.d["ritmo"].get("pausa_min", (cfg or {}).get("pausa_bloqueo_min", 15)))
+        return int(self.d["ritmo"].get("pausa_min", (cfg or {}).get("pausa_bloqueo_min", PAUSA_MIN)))
+
+    def _subir_ritmo(self, cada_s: int, cfg: dict | None) -> None:
+        """Bloqueo confirmado: el ritmo pasa a `sube_bloqueo` × el que había al bloquear (nunca baja)."""
+        lim = self._limites(cfg)
+        nuevo = max(self.intervalo(cfg), cada_s * lim["sube_bloqueo"], self.piso())
+        self.d["ritmo"]["intervalo_s"] = int(min(lim["maximo_s"], nuevo))
 
     def _ajustar_ritmo(self, resultado: str, cfg: dict, paso: str | None = None, frase: str | None = None) -> None:
         lim, ritmo = self._limites(cfg), self.d["ritmo"]
         actual = self.intervalo(cfg)
         anterior = self.d["revisiones"][-1]["r"] if self.d["revisiones"] else None
-        base = cfg.get("pausa_bloqueo_min", 15)
+        base = cfg.get("pausa_bloqueo_min", PAUSA_MIN)
         pausas = ritmo.setdefault("pausa_por_frase", {})
         if resultado == "bloqueo":
             frase = frase or "?"
             ritmo.setdefault("bloqueos", []).append({
                 "t": f"{datetime.now():%Y-%m-%dT%H:%M}", "cada_s": actual, "frase": frase, "paso": paso or "?",
-                "por_hora": self._por_hora() + 1})
-            nuevo = actual * 2
+                "por_hora": self._por_hora() + 1, "confirmado": False})  # el ritmo espera tu respuesta
+            nuevo = actual
             if anterior == "bloqueo":  # bloqueo justo al volver de la pausa: la próxima, el doble
                 ritmo["pausa_min"] = min(240, self.pausa_min(cfg) * 2)
             else:  # parte de la que funcionó la última vez con este tipo, probando un 25 % menos
                 ritmo["pausa_min"] = max(base, int(pausas.get(frase, base) * 0.75))
             ritmo["ultima_frase"] = frase
-        elif resultado == "error":
-            nuevo = actual * 1.5
+        elif resultado == "error":  # no cambia: si fue un bloqueo encubierto lo dirás por Telegram
+            nuevo = actual
         else:  # revisión completa: probar un poco más rápido
             nuevo = actual - lim["baja_s"]
             if "pausa_min" in ritmo:  # la pausa funcionó: se recuerda para ese tipo de bloqueo
@@ -258,8 +272,10 @@ class Aprendizaje:
             lineas.append("Pausa que funcionó por tipo: " + ", ".join(f"«{f}» {m} min" for f, m in pausas.items()))
         for f in self.d["ritmo"].get("falsas_alarmas", []):
             lineas.append(f"  falsa alarma (según tú): «{f['frase']}» en {f['paso']}")
-        for b in self._bloqueos()[-5:]:
-            lineas.append(f"  bloqueo {b['t']}{' ✓' if b.get('confirmado') else ''}: «{b.get('frase', '?')}» en {b.get('paso', '?')}, cada "
+        self._bloqueos()  # olvida los de más de 7 días
+        for b in self.d["ritmo"].get("bloqueos", [])[-5:]:
+            marca = " ✓" if b.get("confirmado", True) else " (sin confirmar: no cuenta)"
+            lineas.append(f"  bloqueo {b['t']}{marca}: «{b.get('frase', '?')}» en {b.get('paso', '?')}, cada "
                           f"{b['cada_s'] / 60:.1f} min, "
                           f"{b.get('por_hora') or self._por_hora(datetime.fromisoformat(b['t']))} revisiones en la hora previa")
         if self.d.get("proxima"):

@@ -50,23 +50,28 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
 - **Ritmo aprendido.** Las citas que otros cancelan se liberan en cualquier momento y duran poco, así que
   conviene revisar seguido; pero consultar demasiado provoca bloqueos, y el sitio no publica su límite. El
   agente lo busca solo, como el control de congestión de TCP: cada revisión sin problemas acorta el
-  intervalo 30 s (hasta 1 min); un error del sitio lo alarga ×1,5 (a veces se cae solo) y un bloqueo ×2.
-  El intervalo al que hubo un bloqueo queda como **piso** (+25 %) durante 7 días; al caducar, vuelve a
-  probar. Además aprende de cada bloqueo:
+  intervalo 30 s (hasta 1 min). Un error o un bloqueo **no cambian el ritmo por sí solos**: el agente
+  pregunta por Telegram y espera tu respuesta (detectar un bloqueo por el texto de la página a veces falla,
+  y subir el ritmo por una falsa alarma lo deja lento sin motivo). Mientras tanto, tras un bloqueo detectado
+  pausa `pausa_bloqueo_min` (5 por defecto: lo que bastaba al revisar a mano). Si confirmas que fue bloqueo,
+  el intervalo pasa a `sube_bloqueo` × el que había (1,25 por defecto: subir poco, no duplicar) y ese
+  intervalo queda como **piso** (+25 %) durante 7 días; al caducar, vuelve a probar. De cada bloqueo
+  confirmado aprende además:
   - **Tope por hora:** cuántas revisiones llevaba en la hora previa; no vuelve a pasar de esa cantidad
     menos una. Algunos sitios limitan consultas por hora y no por intervalo: con un tope de 10, aunque el
     piso permita 3 min, revisa cada 6.
   - **Horas con bloqueos:** si en una hora del día hubo 2 o más en la semana, en esa hora va 1,5× más lento.
-  - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (15 por
+  - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (5 por
     defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
     tipo y la próxima vez prueba un 25 % menos.
   - La captura del aviso ⛔ es la página del bloqueo, y el aviso dice qué frase lo detectó. Llega con dos
-    botones, **"✅ Sí es bloqueo" / "❌ No es bloqueo"**: si respondes que no, el agente deshace lo aprendido de
-    ese bloqueo (piso, tope, ritmo), levanta la pausa y recuerda esa frase en ese paso como falsa alarma. Lee
+    botones, **"✅ Sí es bloqueo" / "❌ No es bloqueo"**: si respondes que sí, aplica lo de arriba; si
+    respondes que no, levanta la pausa y recuerda esa frase en ese paso como falsa alarma. Lee
     la respuesta en el siguiente arranque (≤ 1 min); el mensaje se edita con lo que hizo.
   - Los **errores** (un "Internal Server Error", una página que no carga) también llegan con botones,
     **"🚫 Fue bloqueo" / "⚠️ Error normal"**: un sitio puede frenar en vez de bloquear. Si respondes que fue
-    bloqueo, se aprende como tal (piso, tope por hora, ritmo ×2) y pausa.
+    bloqueo, se aprende como bloqueo confirmado (piso, tope por hora, ritmo ×1,25) y pausa.
+    Si no respondes, el bloqueo o error queda sin contar (se ve en `--aprendizaje` como «sin confirmar»).
   - Las capturas normales se sobrescriben (`ultima.png`, `ultima/`); las de bloqueo y falsa alarma se
     conservan en `data/cita/bloqueos/` (captura + HTML, las 50 más recientes). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
   candado evita dos revisiones a la vez.
