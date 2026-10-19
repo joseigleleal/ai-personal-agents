@@ -100,6 +100,28 @@ cp config/cita.example.yaml config/cita.yaml          # completar país, teléfo
 ./scripts/instalar_launchd.sh cita desinstalar             # quitarlo
 ```
 
+## En un servidor (Oracle Cloud, 24 h)
+
+La Mac deja de revisar cuando duerme. `scripts/oracle_cita.sh ubuntu@<ip>` lleva el agente a una VM A1 de
+Oracle (Always Free, ARM; la Micro de 1 GB no alcanza para Chromium) desde la Mac:
+
+- **Claves cifradas.** `CITA_CERT_PASSWORD` y el bot de Telegram se cifran con `systemd-creds`; el servicio las
+  descifra solo en memoria al correr. No hay `.env` en el servidor. Límite: la llave que las descifra vive en la
+  misma VM (solo root la lee), así que protege de fugas (respaldos, copias), no de alguien que ya sea root.
+- **Certificado** con permisos 600 en una carpeta 700; SSH solo con llave, sin root, `fail2ban` y
+  actualizaciones de seguridad automáticas. Si la VM se viera comprometida: revocar el certificado en la FNMT.
+- **Un solo lugar a la vez.** El sitio no tolera dos sesiones de la misma persona: con la Mac y la VM revisando
+  a la vez, ambas reciben "sesión caducada" o errores 500. Por eso el script quita `cita` de launchd en la Mac;
+  para volver: `./scripts/instalar_launchd.sh cita` y `sudo systemctl disable --now agentic-cita.timer` en la VM.
+- Timer de systemd cada 1 min llamando a Python directo (no `run_agent.sh`, que actualiza el repo en cada arranque);
+  el agente decide el ritmo. Modo fantasma: no necesita pantalla virtual (`xvfb`).
+
+```bash
+./scripts/oracle_cita.sh ubuntu@<ip>                                   # instalar y probar
+ssh -i ~/.ssh/oracle_agents ubuntu@<ip> tail -f ai-personal-agents/data/cita.log
+ssh -i ~/.ssh/oracle_agents ubuntu@<ip> 'cd ai-personal-agents && git pull'   # actualizar el código
+```
+
 ## Límites conocidos
 
 - Las pantallas posteriores a "hay citas" se escribieron y simularon con los nombres de campos conocidos del

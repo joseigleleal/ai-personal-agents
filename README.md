@@ -101,6 +101,9 @@ nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 
 # En el servidor. Con menos de 8 GB de RAM no instala Ollama y deja los modelos en Groq
 git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
 cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa un timer por agente
+
+# Desde la Mac: el agente cita en la VM A1, con claves cifradas (ver agents/cita/README.md)
+./scripts/oracle_cita.sh ubuntu@<ip>
 ```
 
 Para actualizar el servidor basta con `git push`: en cada corrida hace `git pull`.
