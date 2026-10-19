@@ -100,6 +100,8 @@ while true; do
       sleep "$BACKOFF"
     elif grep -qiE "timed out|RequestException|ServiceUnavailable|Connection(Error| reset| aborted)" <<<"$out"; then
       log "Intento $attempt [$name $ocpu/$mem]: falla de red, sigo con el siguiente"
+    elif grep -qiE "clock skew" <<<"$out"; then  # la Mac durmió con el pedido ya firmado: la firma quedó vieja
+      log "Intento $attempt [$name $ocpu/$mem]: pedido vencido (la Mac durmió), sigo con el siguiente"
     else
       log "Intento $attempt [$name $ocpu/$mem]: error inesperado, me detengo:"
       log "$(grep -E '"(code|message)"' <<<"$out" | tr -s ' ')"
