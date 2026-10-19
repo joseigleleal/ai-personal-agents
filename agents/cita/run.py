@@ -16,6 +16,7 @@ Uso:
 import argparse
 import base64
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -55,6 +56,8 @@ LATIDO = WORK / "latido"           # se toca en cada arranque: si pasa mucho sin
 PAGINAS = WORK / "paginas"         # copia de las páginas cuando hubo citas (para ensayar la reserva)
 BLOQUEOS = WORK / "bloqueos"       # captura y HTML de cada bloqueo (las demás capturas se sobrescriben)
 MAX_BLOQUEOS = 50                  # se guardan solo los más recientes
+NO_ENVIADOS = WORK / "no_enviados.json"  # avisos que Telegram no entregó: se resumen en el siguiente arranque
+MAX_NO_ENVIADOS = 20
 
 NO_CITAS = "no hay citas disponibles"
 BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
@@ -83,6 +86,7 @@ def log(msg: str) -> None:
 def avisar(text: str, sonido: bool = False) -> None:
     log(text.replace("\n", " | "))
     if not notify.telegram(text, "cita"):
+        no_enviado(text.splitlines()[0][:120])
         notify.macos("Cita extranjería", text.splitlines()[0])
     if sonido:
         subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
@@ -439,6 +443,73 @@ def nueva_pagina(contexto) -> Page:
     return page
 
 
+PASOS = {  # qué hace cada paso, para que los avisos de error se entiendan sin leer el código
+    "conexion": "conectar con el sitio de citas", "inicio": "abrir la página de inicio",
+    "provincia": "elegir la provincia", "oficina": "elegir la oficina", "tramite": "elegir el trámite",
+    "acceso_clave": "entrar a Cl@ve", "certificado": "identificarse con el certificado en Cl@ve",
+    "vuelta_clave": "volver de Cl@ve al sitio de citas", "datos": "llenar tus datos",
+    "solicitar": "pedir la cita", "contacto": "poner teléfono y correo",
+    "horario": "elegir el horario", "sms": "esperar el código SMS", "confirmar": "confirmar la cita",
+}
+
+
+def explicar_error(e: Exception) -> str:
+    """Traduce la excepción de un recorrido fallido a una frase clara."""
+    if isinstance(e, SesionCaducada):
+        return "al volver de Cl@ve, el sitio dijo que la sesión había caducado (falla del sitio, pasa a veces)"
+    texto = str(e).splitlines()[0] if str(e) else type(e).__name__
+    if "Timeout" in texto:
+        return "la página no respondió a tiempo (el sitio estaba lento o no cargó)"
+    if "No volvió de Cl@ve" in texto:
+        return "Cl@ve no devolvió al sitio de citas en 2 minutos"
+    return texto[:200]
+
+
+def motivo_legible(error: str) -> str:
+    """Traduce el motivo técnico de un envío fallido (core.notify.ultimo_error) a algo claro."""
+    if "Timeout" in error:
+        return "Telegram tardó demasiado en responder"
+    if error in ("ConnectionError", "SSLError", "ProxyError"):
+        return "no había conexión con Telegram"
+    if error.startswith("HTTP 429"):
+        return "Telegram frenó los envíos por exceso de mensajes"
+    if error.startswith("HTTP 5"):
+        return "falla en los servidores de Telegram"
+    if error.startswith("HTTP 4"):
+        return f"Telegram rechazó el mensaje ({error})"
+    return error or "motivo desconocido"
+
+
+def no_enviado(que: str) -> None:
+    """Anota en el log y en NO_ENVIADOS un aviso que Telegram no entregó (se te resume en el siguiente arranque)."""
+    motivo = motivo_legible(notify.ultimo_error)
+    log(f"No se pudo enviar por Telegram: {que} ({motivo}).")
+    try:
+        lista = json.loads(NO_ENVIADOS.read_text()) if NO_ENVIADOS.exists() else []
+    except ValueError:
+        lista = []
+    lista.append({"t": f"{datetime.now():%H:%M}", "que": que, "motivo": motivo})
+    NO_ENVIADOS.write_text(json.dumps(lista[-MAX_NO_ENVIADOS:], ensure_ascii=False))
+
+
+def reportar_no_enviados() -> None:
+    """Si hubo avisos que no llegaron, te manda un resumen; se borra solo cuando ese resumen sí llega."""
+    if not NO_ENVIADOS.exists():
+        return
+    try:
+        lista = json.loads(NO_ENVIADOS.read_text())
+    except ValueError:
+        lista = []
+    if lista:
+        lineas = "\n".join(f"• {a['t']} — {a['que']}: {a['motivo']}." for a in lista)
+        texto = (f"📭 No te llegaron {len(lista)} aviso{'s' if len(lista) > 1 else ''} de Cita:\n{lineas}\n"
+                 "El agente siguió revisando con normalidad.")
+        if not notify.telegram(texto, "cita", silent=True):
+            return  # sigue sin conexión: se intenta en el próximo arranque
+        log(f"Resumen enviado por Telegram: {len(lista)} aviso(s) que no habían llegado.")
+    NO_ENVIADOS.unlink(missing_ok=True)
+
+
 def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: str | None = None) -> None:
     """Manda la última captura por Telegram solo si el resultado cambió desde la última enviada
     (sin citas → hay citas, error en un paso, bloqueo…). Se compara el resultado y no la imagen ni el texto:
@@ -458,6 +529,8 @@ def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: s
     if notify.telegram_foto(VISTA, texto, "cita", botones=botones):
         VISTA_ENVIADA.write_text(estado)
         log(f"Captura enviada por Telegram (cambió a «{estado}»).")
+    else:
+        no_enviado(f"captura «{estado.replace('_', ' ')}»")
 
 
 def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
@@ -534,9 +607,10 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                     log("Sin citas disponibles." + (" (se agotaron)" if vio_citas else ""))
                     mem.revision("sin_citas", cfg=cfg)
                     if mem.toca_aviso(cfg.get("aviso_sin_citas_min", 30)):
-                        notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
-                                        f"{cfg['provincia']}. Sigo revisando cada "
-                                        f"~{mem.intervalo(cfg) / 60:.1f} min.", "cita")
+                        if not notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
+                                               f"{cfg['provincia']}. Sigo revisando cada "
+                                               f"~{mem.intervalo(cfg) / 60:.1f} min.", "cita"):
+                            no_enviado("⏳ sin citas")
                     return
                 if not vio_citas:
                     vio_citas = True
@@ -593,6 +667,7 @@ def main() -> None:
     revisar_latido(cfg, mem)
     if not LOCK.exists() or time.time() - LOCK.stat().st_mtime >= 20 * 60:  # sin otra revisión escribiendo
         leer_respuestas(mem, cfg)
+        reportar_no_enviados()
     if not args.ya and not mem.toca():  # launchd lanza cada 1 min; la memoria decide el ritmo
         return
     if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
@@ -635,10 +710,14 @@ def main() -> None:
                 url = contexto.pages[-1].url if contexto.pages else "?"
                 log(f"Error en «{paso}» ({url}): {e}")
                 mem.revision("error", paso, cfg)
+                reservando = any(r["r"] == "hay_citas" and r["t"] >= inicio for r in mem.d["revisiones"])
                 if error_nuevo(str(e)):
-                    avisar(f"⚠️ Cita: falló en el paso «{paso}» tras reintentar\n{url}\n"
-                           f"{str(e).splitlines()[0][:300]}\n"
-                           "Si estaba reservando, entra tú ya. Capturas en data/cita/ultima/.")
+                    avisar(f"⚠️ {datetime.now():%H:%M} Cita: esta revisión no se pudo completar "
+                           f"(probé {1 + int(cfg.get('reintentos', 2))} veces).\n"
+                           f"Dónde: al {PASOS.get(paso, paso)}.\n"
+                           f"Qué pasó: {explicar_error(e)}.\n"
+                           + ("🚨 ¡Estaba reservando una cita! Entra tú ya: " + ICP if reservando
+                              else "No tienes que hacer nada: sigo revisando como siempre."))
             finally:
                 contexto.close()
                 navegador.close()

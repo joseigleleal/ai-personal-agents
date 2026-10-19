@@ -197,7 +197,7 @@ class SitioSimulado(unittest.TestCase):
         for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("VISTA", self.tmp / "ultima.png"),
                               ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
                               ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas"),
-                              ("BLOQUEOS", self.tmp / "bloqueos")):
+                              ("BLOQUEOS", self.tmp / "bloqueos"), ("NO_ENVIADOS", self.tmp / "no_enviados.json")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -301,6 +301,29 @@ class SitioSimulado(unittest.TestCase):
             for estado in ("sin_citas", "sin_citas", "error en «clave»", "sin_citas"):
                 run.enviar_vista_si_cambio(estado)
         self.assertEqual(foto.call_count, 3)
+
+    def test_errores_se_explican_claro(self):
+        self.assertIn("sesión había caducado", run.explicar_error(run.SesionCaducada(SITIO + "infogenerica")))
+        self.assertIn("no respondió a tiempo", run.explicar_error(Exception("Locator.click: Timeout 30000ms exceeded.")))
+        self.assertEqual(run.PASOS["vuelta_clave"], "volver de Cl@ve al sitio de citas")
+
+    def test_avisos_no_enviados_se_resumen_despues(self):
+        run.VISTA.write_bytes(b"png")
+        run.notify.ultimo_error = "ReadTimeout"
+        with mock.patch.object(run.notify, "telegram_foto", return_value=False):
+            run.enviar_vista_si_cambio("error en «tramite»", error_t="2026-10-19T19:02")
+        run.notify.ultimo_error = "HTTP 502"
+        run.no_enviado("⏳ sin citas")
+        with mock.patch.object(run.notify, "telegram", return_value=False) as tg:
+            run.reportar_no_enviados()  # sigue sin conexión: se guarda para la próxima
+        self.assertTrue(run.NO_ENVIADOS.exists())
+        with mock.patch.object(run.notify, "telegram", return_value=True) as tg:
+            run.reportar_no_enviados()
+        texto = tg.call_args.args[0]
+        self.assertIn("No te llegaron 2 avisos", texto)
+        self.assertIn("captura «error en «tramite»»: Telegram tardó demasiado en responder", texto)
+        self.assertIn("⏳ sin citas: falla en los servidores de Telegram", texto)
+        self.assertFalse(run.NO_ENVIADOS.exists())
 
 if __name__ == "__main__":
     unittest.main()

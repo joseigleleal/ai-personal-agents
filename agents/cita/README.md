@@ -103,8 +103,13 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
   confirma. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
   hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
-- **Sin spam de errores.** El mismo error se avisa como máximo una vez cada 3 h; las capturas de cada paso
+- **Sin spam de errores.** El mismo error se avisa como máximo una vez cada 3 h, en lenguaje claro (en qué paso,
+  qué pasó y si tienes que hacer algo; los detalles técnicos quedan en el log); las capturas de cada paso
   quedan en `data/cita/ultima/` para diagnosticar.
+- **Avisos que no llegan.** Si Telegram falla (red, servidor caído, exceso de mensajes), `core/notify.py`
+  reintenta una vez a los 3 s. Si tampoco sale, queda en el log con el motivo y en `data/cita/no_enviados.json`;
+  en el siguiente arranque (cada 1 min) te llega un resumen en lenguaje claro (hora, qué aviso y por qué no llegó).
+  Así se sabe si se perdió algo, sin reenviar avisos viejos uno por uno.
 
 ## Uso
 

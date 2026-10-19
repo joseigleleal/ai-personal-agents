@@ -2,12 +2,37 @@
 import json
 import platform
 import subprocess
+import time
 
 import requests
 
 from core.config import env
 
 TELEGRAM_LIMIT = 4000  # Telegram corta en 4096 caracteres
+ultimo_error = ""      # motivo del último envío fallido a Telegram (sin el token), para el log del agente
+
+
+def _post(url: str, **kw) -> bool:
+    """POST a Telegram con un reintento; si falla, deja el motivo en `ultimo_error`."""
+    global ultimo_error
+    for intento in range(2):
+        try:
+            for f in kw.get("files", {}).values():
+                f.seek(0)
+            r = requests.post(url, **kw)
+            if r.ok:
+                return True
+            try:
+                ultimo_error = f"HTTP {r.status_code}: {r.json().get('description', '')}"
+            except ValueError:
+                ultimo_error = f"HTTP {r.status_code}"
+            if r.status_code < 500 and r.status_code != 429:
+                return False
+        except requests.RequestException as e:
+            ultimo_error = type(e).__name__  # el mensaje completo incluiría la URL con el token
+        if not intento:
+            time.sleep(3)
+    return False
 
 
 def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
@@ -20,17 +45,13 @@ def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
     chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
-    try:
-        for i in range(0, len(text), TELEGRAM_LIMIT):
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text[i:i + TELEGRAM_LIMIT], "disable_web_page_preview": True,
-                      "disable_notification": silent},
-                timeout=20,
-            ).raise_for_status()
-        return True
-    except requests.RequestException:
-        return False
+    return all(
+        _post(f"https://api.telegram.org/bot{token}/sendMessage",
+              json={"chat_id": chat_id, "text": text[i:i + TELEGRAM_LIMIT], "disable_web_page_preview": True,
+                    "disable_notification": silent},
+              timeout=20)
+        for i in range(0, len(text), TELEGRAM_LIMIT)
+    )
 
 
 def telegram_foto(path, caption: str, agent: str | None = None, silent: bool = False,
@@ -44,18 +65,19 @@ def telegram_foto(path, caption: str, agent: str | None = None, silent: bool = F
     chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
+    global ultimo_error
     try:
         with open(path, "rb") as f:
-            requests.post(
+            return _post(
                 f"https://api.telegram.org/bot{token}/sendPhoto",
                 data={"chat_id": chat_id, "caption": caption[:1000], "disable_notification": silent,
                       **({"reply_markup": json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d}
                                                                            for t, d in botones]]})}
                          if botones else {})},
                 files={"photo": f}, timeout=60,
-            ).raise_for_status()
-        return True
-    except (OSError, requests.RequestException):
+            )
+    except OSError as e:
+        ultimo_error = f"no se pudo leer la imagen: {e}"
         return False
 
 
