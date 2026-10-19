@@ -52,8 +52,23 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   agente lo busca solo, como el control de congestión de TCP: cada revisión sin problemas acorta el
   intervalo 30 s (hasta 1 min); un error del sitio lo alarga ×1,5 (a veces se cae solo) y un bloqueo ×2.
   El intervalo al que hubo un bloqueo queda como **piso** (+25 %) durante 7 días; al caducar, vuelve a
-  probar. Tras un bloqueo pausa `pausa_bloqueo_min` (15 por defecto), y si al volver lo bloquean otra vez,
-  la siguiente pausa dura el doble (tope 4 h). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
+  probar. Además aprende de cada bloqueo:
+  - **Tope por hora:** cuántas revisiones llevaba en la hora previa; no vuelve a pasar de esa cantidad
+    menos una. Algunos sitios limitan consultas por hora y no por intervalo: con un tope de 10, aunque el
+    piso permita 3 min, revisa cada 6.
+  - **Horas con bloqueos:** si en una hora del día hubo 2 o más en la semana, en esa hora va 1,5× más lento.
+  - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (15 por
+    defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
+    tipo y la próxima vez prueba un 25 % menos.
+  - La captura del aviso ⛔ es la página del bloqueo, y el aviso dice qué frase lo detectó. Llega con dos
+    botones, **"✅ Sí es bloqueo" / "❌ No es bloqueo"**: si respondes que no, el agente deshace lo aprendido de
+    ese bloqueo (piso, tope, ritmo), levanta la pausa y recuerda esa frase en ese paso como falsa alarma. Lee
+    la respuesta en el siguiente arranque (≤ 1 min); el mensaje se edita con lo que hizo.
+  - Los **errores** (un "Internal Server Error", una página que no carga) también llegan con botones,
+    **"🚫 Fue bloqueo" / "⚠️ Error normal"**: un sitio puede frenar en vez de bloquear. Si respondes que fue
+    bloqueo, se aprende como tal (piso, tope por hora, ritmo ×2) y pausa.
+  - Las capturas normales se sobrescriben (`ultima.png`, `ultima/`); las de bloqueo y falsa alarma se
+    conservan en `data/cita/bloqueos/` (captura + HTML, las 50 más recientes). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
   candado evita dos revisiones a la vez.
 - **Reintentos en dos niveles.** Cada botón tiene su tiempo de espera; si se agota, el agente reintenta ese
   paso con más tiempo (y si la página siguiente llegó tarde, sigue). Si el paso sigue fallando (o el sitio
@@ -118,8 +133,40 @@ Oracle (Always Free, ARM; la Micro de 1 GB no alcanza para Chromium) desde la Ma
 
 ```bash
 ./scripts/oracle_cita.sh ubuntu@<ip>                                   # instalar y probar
-ssh -i ~/.ssh/oracle_agents ubuntu@<ip> tail -f ai-personal-agents/data/cita.log
-ssh -i ~/.ssh/oracle_agents ubuntu@<ip> 'cd ai-personal-agents && git pull'   # actualizar el código
+```
+
+**Comandos para revisarlo desde la Mac.** Con un alias en `~/.ssh/config` basta `ssh oracle`:
+
+```
+Host oracle
+  HostName <ip>
+  User ubuntu
+  IdentityFile ~/.ssh/oracle_agents
+```
+
+```bash
+ssh oracle                                                              # entrar a la VM (salir: exit)
+
+# Agente
+ssh oracle 'tail -20 ai-personal-agents/data/cita.log'                  # últimas revisiones
+ssh oracle 'tail -f ai-personal-agents/data/cita.log'                   # en vivo (Ctrl+C)
+ssh oracle 'cd ai-personal-agents && .venv/bin/python -m agents.cita.run --aprendizaje'  # ritmo, piso, bloqueos
+ssh oracle 'systemctl list-timers agentic-cita.timer'                   # próximo arranque
+ssh oracle 'journalctl -u agentic-cita.service -n 20 --no-pager'        # registro de systemd
+scp oracle:ai-personal-agents/data/cita/ultima.png /tmp/ && open /tmp/ultima.png   # última pantalla
+
+# Control
+# revisar ya (la variable se quita apenas arranca: si no, el arranque que el timer deja en cola la hereda)
+ssh oracle 'sudo systemctl set-environment CITA_ARGS=--ya && sudo systemctl start --no-block agentic-cita.service; sleep 3; sudo systemctl unset-environment CITA_ARGS'
+ssh oracle 'sudo systemctl stop agentic-cita.timer'                     # pausar
+ssh oracle 'sudo systemctl start agentic-cita.timer'                    # reanudar
+ssh oracle 'cd ai-personal-agents && git pull'                          # actualizar el código tras un push
+
+# Máquina y seguridad
+ssh oracle 'uptime; free -h; df -h /'                                   # carga, memoria, disco
+ssh oracle 'systemctl --failed'                                         # servicios con fallas
+ssh oracle 'sudo fail2ban-client status sshd'                           # IPs bloqueadas por intentar entrar
+ssh oracle 'last -n 10'                                                 # últimos accesos: deberían ser solo tuyos
 ```
 
 ## Límites conocidos

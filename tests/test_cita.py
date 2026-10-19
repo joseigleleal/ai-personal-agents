@@ -105,6 +105,57 @@ class Memoria(unittest.TestCase):
         self.mem.revision("sin_citas", cfg=cfg)
         self.assertEqual(self.mem.pausa_min(cfg), 15)
 
+    def test_tope_por_hora_y_horas_con_bloqueos(self):
+        for _ in range(9):
+            self.mem.revision("sin_citas")
+        self.mem.revision("bloqueo", "acceso_clave", frase="too many requests")
+        self.assertEqual(self.mem.tope_por_hora(), 9)  # bloqueó con 10 en la hora: máximo 9
+        self.assertEqual(self.mem.d["ritmo"]["bloqueos"][-1]["paso"], "acceso_clave")
+        self.assertEqual(self.mem.horas_bloqueo(), set())
+        self.mem.revision("bloqueo", frase="too many requests")
+        self.assertEqual(self.mem.horas_bloqueo(), {datetime.now().hour})
+        cuando = self.mem.programar_siguiente({})
+        self.assertGreaterEqual(cuando, datetime.now() + timedelta(seconds=3600 // 9 - 1))
+
+    def test_pausa_por_tipo_de_bloqueo(self):
+        cfg = {"pausa_bloqueo_min": 15}
+        for _ in range(3):  # se repite al volver: 15 → 30 → 60
+            self.mem.revision("bloqueo", cfg=cfg, frase="intrusion prevention")
+        self.mem.revision("sin_citas", cfg=cfg)  # con 60 funcionó
+        self.assertEqual(self.mem.d["ritmo"]["pausa_por_frase"]["intrusion prevention"], 60)
+        self.mem.revision("bloqueo", cfg=cfg, frase="intrusion prevention")
+        self.assertEqual(self.mem.pausa_min(cfg), 45)  # parte de lo que funcionó, un 25 % menos
+        self.mem.revision("sin_citas", cfg=cfg)
+        self.mem.revision("bloqueo", cfg=cfg, frase="too many requests")
+        self.assertEqual(self.mem.pausa_min(cfg), 15)  # otro tipo: desde la base
+
+    def test_respuesta_no_es_bloqueo_deshace_lo_aprendido(self):
+        self.mem.d["ritmo"]["intervalo_s"] = 240
+        self.mem.revision("bloqueo", "acceso_clave", frase="too many requests")
+        t = self.mem.d["ritmo"]["bloqueos"][-1]["t"]
+        self.assertEqual((self.mem.intervalo(), self.mem.piso()), (480, 300))
+        self.assertIn("falsa alarma", self.mem.respuesta_bloqueo(t, es_bloqueo=False))
+        self.assertEqual((self.mem.intervalo(), self.mem.piso(), self.mem.tope_por_hora()), (240, 0, None))
+        self.assertTrue(self.mem.es_falsa_alarma("too many requests", "acceso_clave"))
+        self.assertIsNone(self.mem.respuesta_bloqueo(t, es_bloqueo=True))  # ya no está
+
+    def test_respuesta_si_es_bloqueo_lo_confirma(self):
+        self.mem.revision("bloqueo", "acceso_clave", frase="too many requests")
+        t = self.mem.d["ritmo"]["bloqueos"][-1]["t"]
+        self.mem.respuesta_bloqueo(t, es_bloqueo=True)
+        self.assertTrue(self.mem.d["ritmo"]["bloqueos"][-1]["confirmado"])
+        self.assertFalse(self.mem.es_falsa_alarma("too many requests", "acceso_clave"))
+
+    def test_error_que_era_bloqueo(self):
+        cfg = {"pausa_bloqueo_min": 15}
+        self.mem.d["ritmo"]["intervalo_s"] = 240
+        self.mem.revision("error", "provincia", cfg)  # ×1,5 → 360
+        t = self.mem.d["revisiones"][-1]["t"]
+        self.assertIn("Aprendido como bloqueo", self.mem.error_fue_bloqueo(t, cfg))
+        self.assertEqual((self.mem.intervalo(cfg), self.mem.piso(), self.mem.pausa_min(cfg)), (480, 300, 15))
+        self.assertEqual(self.mem.d["revisiones"][-1]["r"], "bloqueo")
+        self.assertIsNone(self.mem.error_fue_bloqueo(t, cfg))  # ya no es un error
+
     def test_bloqueo_viejo_caduca(self):
         self.mem.d["ritmo"]["bloqueos"] = [{"t": "2020-01-01T10:00", "cada_s": 600}]
         self.assertEqual(self.mem.piso(), 0)
@@ -138,7 +189,8 @@ class SitioSimulado(unittest.TestCase):
         self.enviados = {}
         for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("VISTA", self.tmp / "ultima.png"),
                               ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
-                              ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas")):
+                              ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas"),
+                              ("BLOQUEOS", self.tmp / "bloqueos")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -211,6 +263,30 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(e.exception.paso, "confirmar")
         self.assertFalse(run.DONE.exists())
         self.esperar_codigo_telegram.assert_called_once()  # un solo intento de reserva
+
+    def test_bloqueo_guarda_su_captura_y_respeta_falsa_alarma(self):
+        page = self.contexto.new_page()
+        with mock.patch.dict(PAGINAS, {"rechazo": "<html><body>Too Many Requests</body></html>"}):
+            page.goto(SITIO + "rechazo")
+        flujo = run.Flujo(page, CFG, self.mem)
+        flujo.paso = "acceso_clave"
+        with self.assertRaises(run.Bloqueado) as e:
+            flujo.revisar_bloqueo()
+        self.assertEqual((e.exception.frase, e.exception.paso), ("too many requests", "acceso_clave"))
+        self.assertEqual(len(list(run.BLOQUEOS.glob("*_bloqueo_acceso_clave.png"))), 1)
+        self.mem.d["ritmo"]["falsas_alarmas"] = [{"frase": "too many requests", "paso": "acceso_clave"}]
+        flujo.revisar_bloqueo()  # ya no detiene
+
+    def test_bloqueo_se_envia_con_botones(self):
+        run.VISTA.write_bytes(b"png")
+        with mock.patch.object(run.notify, "telegram_foto", return_value=True) as foto:
+            run.enviar_vista_si_cambio("bloqueo en «acceso_clave»", "2026-10-19T12:23")
+            run.enviar_vista_si_cambio("bloqueo en «acceso_clave»", "2026-10-19T12:40")  # cada bloqueo se pregunta
+        self.assertEqual(foto.call_count, 2)
+        self.assertEqual(foto.call_args.kwargs["botones"][1], ("❌ No es bloqueo", "bloq:no:2026-10-19T12:40"))
+        with mock.patch.object(run.notify, "telegram_foto", return_value=True) as foto:
+            run.enviar_vista_si_cambio("error en «provincia»", error_t="2026-10-19T12:42")
+        self.assertEqual(foto.call_args.kwargs["botones"][0], ("🚫 Fue bloqueo", "err:si:2026-10-19T12:42"))
 
     def test_captura_solo_si_cambia(self):
         run.VISTA.write_bytes(b"png")

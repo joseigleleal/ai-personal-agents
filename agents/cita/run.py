@@ -53,6 +53,8 @@ LAST_ERROR = WORK / "ultimo_error"  # para no repetir el mismo aviso de error ca
 MEMORIA = WORK / "aprendizaje.json"
 LATIDO = WORK / "latido"           # se toca en cada arranque: si pasa mucho sin tocarse, la Mac dormía
 PAGINAS = WORK / "paginas"         # copia de las páginas cuando hubo citas (para ensayar la reserva)
+BLOQUEOS = WORK / "bloqueos"       # captura y HTML de cada bloqueo (las demás capturas se sobrescriben)
+MAX_BLOQUEOS = 50                  # se guardan solo los más recientes
 
 NO_CITAS = "no hay citas disponibles"
 BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
@@ -61,7 +63,9 @@ SESION_CADUCADA = "sesión ha caducado"
 
 
 class Bloqueado(Exception):
-    pass
+    def __init__(self, mensaje: str, frase: str = "?", paso: str = "?"):
+        super().__init__(mensaje)
+        self.frase, self.paso = frase, paso  # qué texto lo delató y dónde: el agente aprende de cada tipo
 
 
 class Inesperado(Exception):
@@ -116,12 +120,21 @@ class Flujo:
         self.paso = "inicio"         # último paso alcanzado (para el log y la memoria)
         self.confirmando = False     # tras pulsar Confirmar ya no se repite el recorrido
 
-    def foto(self, nombre: str) -> None:
-        """Captura y HTML de la página: el HTML sirve para ensayar la reserva sin el sitio real."""
+    def foto(self, nombre: str, guardar_en: Path | None = None) -> None:
+        """Captura y HTML de la página: el HTML sirve para ensayar la reserva sin el sitio real.
+        `guardar_en`: carpeta donde además se conserva una copia (no se sobrescribe en la próxima revisión)."""
         self.n += 1
         try:
             self.page.screenshot(path=SHOTS / f"{self.n:02d}_{nombre}.png", full_page=True)
             shutil.copyfile(SHOTS / f"{self.n:02d}_{nombre}.png", VISTA)
+            if guardar_en:
+                guardar_en.mkdir(parents=True, exist_ok=True)
+                base = guardar_en / f"{datetime.now():%Y%m%d-%H%M%S}_{nombre}_{self.paso}"
+                shutil.copyfile(SHOTS / f"{self.n:02d}_{nombre}.png", base.with_suffix(".png"))
+                shutil.copyfile(SHOTS / f"{self.n:02d}_{nombre}.html", base.with_suffix(".html"))
+                for viejo in sorted(guardar_en.glob("*.png"))[:-MAX_BLOQUEOS]:
+                    viejo.unlink()
+                    viejo.with_suffix(".html").unlink(missing_ok=True)
             (SHOTS / f"{self.n:02d}_{nombre}.html").write_text(self.page.content())
         except Exception:  # noqa: BLE001 - la captura nunca debe cortar el flujo
             pass
@@ -133,8 +146,13 @@ class Flujo:
             return ""
 
     def revisar_bloqueo(self) -> None:
-        if any(b in self.texto() for b in BLOCKED):
-            raise Bloqueado(self.page.url)
+        frase = next((b for b in BLOCKED if b in self.texto()), None)
+        if frase and self.mem.es_falsa_alarma(frase, self.paso):  # tú dijiste que en este paso no lo es
+            log(f"Texto «{frase}» en «{self.paso}»: lo marcaste como falsa alarma, sigo.")
+            self.foto("falsa_alarma", BLOQUEOS)
+        elif frase:
+            self.foto("bloqueo", BLOQUEOS)  # la página del bloqueo es la que interesa ver, y se conserva
+            raise Bloqueado(f"«{frase}» en {self.page.url}", frase, self.paso)
 
     def pulsar(self, paso: str, *selectores: str, reintentar: bool = True) -> None:
         """Pulsa el primer botón de `selectores` que exista y espera la página siguiente.
@@ -421,15 +439,71 @@ def nueva_pagina(contexto) -> Page:
     return page
 
 
-def enviar_vista_si_cambio(estado: str) -> None:
+def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: str | None = None) -> None:
     """Manda la última captura por Telegram solo si el resultado cambió desde la última enviada
     (sin citas → hay citas, error en un paso, bloqueo…). Se compara el resultado y no la imagen ni el texto:
-    la misma página varía según el instante de la captura (el aviso "no hay citas" aparece un poco después)."""
-    if not VISTA.exists() or (VISTA_ENVIADA.exists() and VISTA_ENVIADA.read_text() == estado):
+    la misma página varía según el instante de la captura (el aviso "no hay citas" aparece un poco después).
+    Los bloqueos se envían siempre, con botones para que digas si de verdad lo son; los errores, con botones
+    para que digas si en realidad eran un bloqueo (un 500 o una página que no carga pueden serlo)."""
+    if not VISTA.exists() or (not bloqueo_t and VISTA_ENVIADA.exists() and VISTA_ENVIADA.read_text() == estado):
         return
-    if notify.telegram_foto(VISTA, f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}.", "cita"):
+    botones, pregunta = None, ""
+    if bloqueo_t:
+        botones = [("✅ Sí es bloqueo", f"bloq:si:{bloqueo_t}"), ("❌ No es bloqueo", f"bloq:no:{bloqueo_t}")]
+        pregunta = "\n¿Es un bloqueo? Si no, deshago lo aprendido y sigo revisando."
+    elif error_t:
+        botones = [("🚫 Fue bloqueo", f"err:si:{error_t}"), ("⚠️ Error normal", f"err:no:{error_t}")]
+        pregunta = "\n¿Fue un bloqueo encubierto? Si sí, pauso y aprendo a ir más lento."
+    texto = f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}." + pregunta
+    if notify.telegram_foto(VISTA, texto, "cita", botones=botones):
         VISTA_ENVIADA.write_text(estado)
         log(f"Captura enviada por Telegram (cambió a «{estado}»).")
+
+
+def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
+    """Lee los botones que pulsaste en Telegram ("¿es un bloqueo?") y aprende de la respuesta.
+    Corre en cada arranque (cada minuto), así la respuesta se aplica en menos de un minuto."""
+    token = env("TELEGRAM_BOT_TOKEN_CITA") or env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return
+    api = f"https://api.telegram.org/bot{token}"
+    try:
+        params = {"timeout": 0, **({"offset": mem.d["tg_offset"]} if mem.d.get("tg_offset") else {})}
+        updates = requests.get(f"{api}/getUpdates", params=params, timeout=20).json().get("result", [])
+    except (requests.RequestException, ValueError):
+        return
+    for u in updates:
+        mem.d["tg_offset"] = u["update_id"] + 1
+        q = u.get("callback_query") or {}
+        partes = q.get("data", "").split(":", 2)
+        if len(partes) != 3 or partes[0] not in ("bloq", "err"):
+            continue
+        tipo, es_bloqueo, t = partes[0], partes[1] == "si", partes[2]
+        if tipo == "bloq":
+            respuesta = mem.respuesta_bloqueo(t, es_bloqueo) or "Ese bloqueo ya no está en la memoria."
+            if not es_bloqueo and "falsa alarma" in respuesta:
+                PAUSE.unlink(missing_ok=True)
+                mem.programar(datetime.now())
+        elif es_bloqueo:  # un error que en realidad era un bloqueo
+            respuesta = mem.error_fue_bloqueo(t, cfg) or "Ese error ya no está en la memoria."
+            if respuesta.startswith("Aprendido"):
+                hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
+                PAUSE.write_text(hasta.isoformat(timespec="minutes"))
+                mem.programar(hasta)
+        else:
+            respuesta = "Ok, queda como error normal."
+        log(f"Respuesta en Telegram sobre el {'bloqueo' if tipo == 'bloq' else 'error'} de {t}: "
+            f"{'sí' if es_bloqueo else 'no'} es bloqueo.")
+        try:
+            requests.post(f"{api}/answerCallbackQuery", json={"callback_query_id": q["id"]}, timeout=20)
+            msg = q.get("message") or {}
+            requests.post(f"{api}/editMessageCaption", timeout=20, json={
+                "chat_id": msg.get("chat", {}).get("id"), "message_id": msg.get("message_id"),
+                "caption": (msg.get("caption") or "").split("\n")[0] + f"\n→ {respuesta}"})
+        except requests.RequestException:
+            pass
+    if updates:
+        mem.guardar()
 
 
 def guardar_paginas() -> None:
@@ -517,6 +591,8 @@ def main() -> None:
         return
     cfg = load_config("cita")
     revisar_latido(cfg, mem)
+    if not LOCK.exists() or time.time() - LOCK.stat().st_mtime >= 20 * 60:  # sin otra revisión escribiendo
+        leer_respuestas(mem, cfg)
     if not args.ya and not mem.toca():  # launchd lanza cada 1 min; la memoria decide el ritmo
         return
     if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
@@ -548,7 +624,7 @@ def main() -> None:
             try:
                 recorrido(contexto, cfg, mem, args.solo_revisar)
             except Bloqueado as e:
-                mem.revision("bloqueo", cfg=cfg)  # aprende: ritmo ×2, piso de 7 días y pausa (×2 si se repite)
+                mem.revision("bloqueo", e.paso, cfg, frase=e.frase)  # aprende ritmo, piso, tope por hora y pausa
                 hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                 mem.programar(hasta)
@@ -568,7 +644,9 @@ def main() -> None:
                 navegador.close()
                 r = mem.d["revisiones"][-1] if mem.d["revisiones"] else {}
                 if r.get("t", "") >= inicio:  # solo si esta corrida llegó a un resultado
-                    enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""))
+                    enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""),
+                                           r["t"] if r["r"] == "bloqueo" else None,
+                                           r["t"] if r["r"] == "error" else None)
     finally:
         if not PAUSE.exists() or datetime.now() >= datetime.fromisoformat(PAUSE.read_text().strip()):
             log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min)")
