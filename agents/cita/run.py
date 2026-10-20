@@ -41,7 +41,7 @@ from cryptography.x509.verification import PolicyBuilder, Store
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
-from agents.cita.aprendizaje import Aprendizaje
+from agents.cita.aprendizaje import SEGUIDOS_PAUSA, Aprendizaje
 from core import notify
 from core.config import DATA_DIR, ROOT, env, load_config
 
@@ -762,7 +762,7 @@ def atender_comando(texto: str, mem: Aprendizaje, cfg: dict) -> None:
         responder("\n".join(l[11:] for l in lineas) or "El registro está vacío.")
     elif cmd == "/revisar":
         mem.programar(datetime.now())
-        responder("Reviso en el próximo minuto." + (" Ojo: estoy en pausa por bloqueo; usa /seguir para quitarla."
+        responder("Reviso en el próximo minuto." + (" Ojo: estoy en pausa; usa /seguir para quitarla."
                                                     if PAUSE.exists() else ""))
     elif cmd == "/pausar":
         hasta = datetime.now() + timedelta(hours=numero or 1)
@@ -831,8 +831,10 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
             except Exception as e:  # noqa: BLE001 - se reintenta; el último intento sube a main()
                 flujo.foto("error")
                 n = flujo.n
-                if flujo.confirmando or intento == intentos - 1:
-                    e.paso, e.causa = flujo.paso, causa_error(e)
+                # un tipo de error que ya salió 3 veces seguidas no se arregla reintentando: mejor pausar
+                pausar = mem.error_repetido(flujo.paso, causa_error(e), cfg) and not vio_citas
+                if flujo.confirmando or intento == intentos - 1 or pausar:
+                    e.paso, e.causa, e.pausar, e.intentos = flujo.paso, causa_error(e), pausar, intento + 1
                     raise
                 espera = 0 if vio_citas else cfg.get("espera_reintento_s", 15) * 2 ** intento
                 log(f"Falló en «{flujo.paso}»: {str(e).splitlines()[0][:150]} — reintento "
@@ -870,7 +872,7 @@ def main() -> None:
     if not args.ya and not mem.toca():  # launchd lanza cada 1 min; la memoria decide el ritmo
         return
     if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
-        log(f"En pausa por bloqueo del sitio hasta {PAUSE.read_text().strip()}")
+        log(f"En pausa hasta {PAUSE.read_text().strip()}")
         return
     if LOCK.exists() and time.time() - LOCK.stat().st_mtime < 20 * 60:
         log("Otra revisión sigue en curso; salgo.")
@@ -911,6 +913,14 @@ def main() -> None:
                 mem.revision("error", paso, cfg, causa=causa)
                 reservando = any(r["r"] == "hay_citas" and r["t"] >= inicio for r in mem.d["revisiones"])
                 conocido, seguidos = mem.tipo_conocido(paso, causa), mem.errores_seguidos()
+                intentos = getattr(e, "intentos", 1 + int(cfg.get("reintentos", 2)))
+                pausa = None
+                if getattr(e, "pausar", False) and conocido != "bloqueo" and not reservando:
+                    pausa = datetime.now() + timedelta(minutes=mem.pausa_error_min(cfg))
+                    PAUSE.write_text(pausa.isoformat(timespec="minutes"))
+                    mem.programar(pausa)
+                    log(f"Error «{causa}» en «{paso}»: ya salió {SEGUIDOS_PAUSA} veces seguidas; pauso hasta "
+                        f"{pausa:%H:%M} y después sigo al mismo ritmo.")
                 if conocido == "bloqueo":  # ya dijiste que este tipo de error es un bloqueo encubierto
                     t = mem.d["revisiones"][-1]["t"]
                     log(f"Error «{causa}» en «{paso}»: lo marcaste como bloqueo. "
@@ -924,12 +934,13 @@ def main() -> None:
                     log(f"Error «{causa}» en «{paso}»: lo marcaste como normal; no aviso.")
                 elif error_nuevo(str(e)) or (conocido and seguidos == 3):
                     avisar(f"⚠️ {datetime.now():%H:%M} Cita: esta revisión no se pudo completar "
-                           f"(probé {1 + int(cfg.get('reintentos', 2))} veces).\n"
+                           f"(probé {intentos} {'vez' if intentos == 1 else 'veces'}).\n"
                            f"Dónde: al {PASOS.get(paso, paso)}.\n"
                            f"Qué pasó: {explicar_error(e)}.\n"
                            + (f"Van {seguidos} revisiones seguidas con error.\n" if seguidos >= 3 else "")
                            + ("🚨 ¡Estaba reservando una cita! Entra tú ya: " + ICP if reservando
-                              else "No tienes que hacer nada: sigo revisando como siempre."))
+                              else f"Este error ya se repitió antes: pauso hasta {pausa:%H:%M} y sigo al mismo "
+                              "ritmo." if pausa else "No tienes que hacer nada: sigo revisando como siempre."))
             finally:
                 contexto.close()
                 navegador.close()

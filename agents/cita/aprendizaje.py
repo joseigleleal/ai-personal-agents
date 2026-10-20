@@ -6,11 +6,14 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 - Qué selector de cada botón funcionó la última vez, para probarlo primero.
 - Ritmo entre revisiones: cada revisión sin problemas lo acorta un poco (hasta 1 min). Un error o un
   bloqueo no lo cambian por sí solos: se pregunta por Telegram y solo si confirmas que fue un bloqueo
-  lo alarga un poco (×1,25 por defecto). Mientras tanto, tras un bloqueo detectado pausa unos minutos.
-  El ritmo de un bloqueo confirmado queda como "piso" durante 7 días (+25 %): no vuelve a bajar de ahí
-  hasta que caduca, y entonces lo prueba de nuevo. Los bloqueos sin confirmar no cuentan para nada de esto.
-- Consultas por hora: en cada bloqueo confirmado, anota cuántas revisiones llevaba en la última hora; no vuelve a pasar de
-  esa cantidad menos una (7 días), aunque el intervalo sea más largo que el piso.
+  lo alarga un poco (×1,25 por defecto). Mientras tanto, tras un bloqueo detectado pausa unos minutos,
+  y después sigue bajando. Los bloqueos sin confirmar no cuentan para nada de esto.
+- Piso y tope por hora (opcionales, `ritmo.dias_piso` > 0): el ritmo de un bloqueo confirmado queda como
+  "piso" esos días (+25 %), y no pasa de las revisiones por hora que llevaba al bloquear, menos una.
+  Por defecto (0) no hay piso: el ritmo sigue buscando el mínimo y los bloqueos se pagan con pausas.
+- Errores que se repiten: si un mismo tipo de error sale 3 veces seguidas (contando los reintentos), se
+  aprende; desde entonces, apenas aparece, pausa `pausa_error_min` (5) en vez de reintentar, y luego sigue
+  con el mismo ritmo. Se olvida si pasa 7 días sin aparecer.
 - Horas con bloqueos: si en una hora del día hubo 2+ bloqueos en la semana, en esa hora revisa 1,5× más lento.
 - Pausa tras un bloqueo, por tipo (la frase que lo delató): si al volver lo bloquean otra vez, la siguiente
   dura el doble; la que funcionó se recuerda para ese tipo y la próxima vez prueba un 25 % menos.
@@ -32,7 +35,10 @@ MAX_REVISIONES = 3000   # historial acotado (≈ 3 semanas a 1 revisión cada 10
 DIAS_HORAS = 60         # citas vistas que cuentan para las horas intensas
 DIAS_PISO = 7           # cuánto se recuerda el ritmo al que hubo un bloqueo
 PAUSA_MIN = 5          # pausa base tras un bloqueo (se sobrescribe con `pausa_bloqueo_min` del yaml)
-RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube_bloqueo": 1.25}  # se sobrescribe con `ritmo:` del yaml
+PAUSA_ERROR_MIN = 5    # pausa ante un error que ya se repitió (se sobrescribe con `pausa_error_min` del yaml)
+SEGUIDOS_PAUSA = 3     # veces seguidas que un tipo de error tiene que salir para aprender a pausar
+RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube_bloqueo": 1.25,
+         "dias_piso": 0}  # se sobrescribe con `ritmo:` del yaml
 
 
 class Aprendizaje:
@@ -100,17 +106,20 @@ class Aprendizaje:
         """Segundos entre revisiones que se están usando ahora."""
         return int(self.d["ritmo"].get("intervalo_s", self._limites(cfg)["inicial_s"]))
 
-    def _bloqueos(self) -> list[dict]:
-        """Bloqueos confirmados de los últimos 7 días (los más viejos se olvidan para volver a probar).
-        Los que esperan tu respuesta en Telegram no cuentan; los anotados antes de preguntar, sí."""
+    def _bloqueos(self, cfg: dict | None = None) -> list[dict]:
+        """Bloqueos confirmados de los últimos `ritmo.dias_piso` días (0 = ninguno: no frenan el ritmo).
+        Se guardan 7 días (para mostrarlos y esperar tu respuesta). Los que esperan tu respuesta en Telegram
+        no cuentan; los anotados antes de preguntar, sí."""
         desde = f"{datetime.now() - timedelta(days=DIAS_PISO):%Y-%m-%dT%H:%M}"
         bloqueos = [b for b in self.d["ritmo"].get("bloqueos", []) if b["t"] >= desde]
         self.d["ritmo"]["bloqueos"] = bloqueos[-50:]
-        return [b for b in bloqueos if b.get("confirmado", True)]
+        dias = self._limites(cfg)["dias_piso"]
+        desde = f"{datetime.now() - timedelta(days=dias):%Y-%m-%dT%H:%M}"
+        return [b for b in bloqueos if b.get("confirmado", True) and dias and b["t"] >= desde]
 
-    def piso(self) -> int:
-        """Ritmo mínimo seguro: el más lento al que hubo un bloqueo en los últimos 7 días, +25 %."""
-        return int(max((b["cada_s"] for b in self._bloqueos()), default=0) * 1.25)
+    def piso(self, cfg: dict | None = None) -> int:
+        """Ritmo mínimo seguro: el más lento al que hubo un bloqueo confirmado en `dias_piso` días, +25 %."""
+        return int(max((b["cada_s"] for b in self._bloqueos(cfg)), default=0) * 1.25)
 
     def _por_hora(self, hasta: datetime | None = None) -> int:
         """Revisiones en los 60 min previos a `hasta` (por defecto, ahora)."""
@@ -118,10 +127,10 @@ class Aprendizaje:
         desde, fin = f"{hasta - timedelta(hours=1):%Y-%m-%dT%H:%M}", f"{hasta:%Y-%m-%dT%H:%M}"
         return sum(1 for r in self.d["revisiones"] if desde <= r["t"] <= fin)
 
-    def tope_por_hora(self) -> int | None:
+    def tope_por_hora(self, cfg: dict | None = None) -> int | None:
         """Máximo de revisiones por hora: una menos que las que llevaba en el bloqueo más exigente (7 días).
         Los bloqueos anotados antes de contar (sin `por_hora`) se calculan con el historial."""
-        cuentas = [b.get("por_hora") or self._por_hora(datetime.fromisoformat(b["t"])) for b in self._bloqueos()]
+        cuentas = [b.get("por_hora") or self._por_hora(datetime.fromisoformat(b["t"])) for b in self._bloqueos(cfg)]
         return max(1, min(cuentas) - 1) if cuentas else None
 
     def respuesta_bloqueo(self, t: str, es_bloqueo: bool, cfg: dict | None = None) -> str | None:
@@ -195,6 +204,30 @@ class Aprendizaje:
         return (f"Anotado: «{r['causa']}» al {r.get('paso', '?')} es un error normal. "
                 "No te vuelvo a preguntar por ese tipo (salvo que se repita varias veces seguidas).")
 
+    def error_repetido(self, paso: str | None, causa: str | None, cfg: dict | None = None) -> bool:
+        """Anota un intento fallido (también los reintentos dentro de una revisión). Devuelve True si conviene
+        pausar `pausa_error_min` en vez de reintentar: este tipo ya salió 3 veces seguidas alguna vez
+        (en los últimos 7 días), o acaba de hacerlo."""
+        ritmo, tipo = self.d["ritmo"], self.tipo_error(paso, causa)
+        racha = ritmo.get("racha") or {}
+        n = racha["n"] + 1 if racha.get("tipo") == tipo else 1
+        ritmo["racha"] = {"tipo": tipo, "n": n}
+        aprendidos = self._errores_pausa()
+        if tipo in aprendidos or n >= SEGUIDOS_PAUSA:
+            aprendidos[tipo] = f"{datetime.now():%Y-%m-%dT%H:%M}"
+            return True
+        return False
+
+    def _errores_pausa(self) -> dict:
+        """Tipos de error que aprendió a esperar (tipo → última vez); olvida los de más de 7 días."""
+        desde = f"{datetime.now() - timedelta(days=DIAS_PISO):%Y-%m-%dT%H:%M}"
+        ritmo = self.d["ritmo"]
+        ritmo["errores_pausa"] = {t: f for t, f in ritmo.get("errores_pausa", {}).items() if f >= desde}
+        return ritmo["errores_pausa"]
+
+    def pausa_error_min(self, cfg: dict | None = None) -> int:
+        return int((cfg or {}).get("pausa_error_min", PAUSA_ERROR_MIN))
+
     def errores_seguidos(self) -> int:
         """Revisiones seguidas, desde la última, que terminaron en error."""
         n = 0
@@ -207,9 +240,9 @@ class Aprendizaje:
     def es_falsa_alarma(self, frase: str, paso: str) -> bool:
         return {"frase": frase, "paso": paso} in self.d["ritmo"].get("falsas_alarmas", [])
 
-    def horas_bloqueo(self) -> set[int]:
-        """Horas del día con 2 o más bloqueos en los últimos 7 días."""
-        horas = Counter(int(b["t"][11:13]) for b in self._bloqueos())
+    def horas_bloqueo(self, cfg: dict | None = None) -> set[int]:
+        """Horas del día con 2 o más bloqueos confirmados en `dias_piso` días."""
+        horas = Counter(int(b["t"][11:13]) for b in self._bloqueos(cfg))
         return {h for h, n in horas.items() if n >= 2}
 
     def pausa_min(self, cfg: dict | None = None) -> int:
@@ -219,7 +252,7 @@ class Aprendizaje:
     def _subir_ritmo(self, cada_s: int, cfg: dict | None) -> None:
         """Bloqueo confirmado: el ritmo pasa a `sube_bloqueo` × el que había al bloquear (nunca baja)."""
         lim = self._limites(cfg)
-        nuevo = max(self.intervalo(cfg), cada_s * lim["sube_bloqueo"], self.piso())
+        nuevo = max(self.intervalo(cfg), cada_s * lim["sube_bloqueo"], self.piso(cfg))
         self.d["ritmo"]["intervalo_s"] = int(min(lim["maximo_s"], nuevo))
 
     def _ajustar_ritmo(self, resultado: str, cfg: dict, paso: str | None = None, frase: str | None = None) -> None:
@@ -243,9 +276,10 @@ class Aprendizaje:
             nuevo = actual
         else:  # revisión completa: probar un poco más rápido
             nuevo = actual - lim["baja_s"]
+            ritmo.pop("racha", None)
             if "pausa_min" in ritmo:  # la pausa funcionó: se recuerda para ese tipo de bloqueo
                 pausas[ritmo.get("ultima_frase", "?")] = ritmo.pop("pausa_min")
-        ritmo["intervalo_s"] = int(min(lim["maximo_s"], max(lim["minimo_s"], self.piso(), nuevo)))
+        ritmo["intervalo_s"] = int(min(lim["maximo_s"], max(lim["minimo_s"], self.piso(cfg), nuevo)))
 
     def horas_intensas(self, extra=()) -> set[int]:
         """Horas en que aparecieron citas (últimos 60 días) y la hora anterior, más las de la config."""
@@ -275,10 +309,10 @@ class Aprendizaje:
         segundos = self.intervalo(cfg)
         intensas = self.horas_intensas(cfg.get("horas_intensas") or ())
         if datetime.now().hour in intensas or (datetime.now() + timedelta(seconds=segundos)).hour in intensas:
-            segundos = max(self._limites(cfg)["minimo_s"], self.piso(), segundos // 2)
-        if datetime.now().hour in self.horas_bloqueo():
+            segundos = max(self._limites(cfg)["minimo_s"], self.piso(cfg), segundos // 2)
+        if datetime.now().hour in self.horas_bloqueo(cfg):
             segundos = int(segundos * 1.5)
-        tope = self.tope_por_hora()
+        tope = self.tope_por_hora(cfg)
         if tope:  # repartir las revisiones permitidas en la hora
             segundos = max(segundos, 3600 // tope)
         cuando = datetime.now() + timedelta(seconds=segundos * random.uniform(0.8, 1.2))
@@ -301,9 +335,9 @@ class Aprendizaje:
         intensas = sorted(self.horas_intensas((cfg or {}).get("horas_intensas") or ()))
         lineas.append("Horas intensas: " + (", ".join(f"{h:02d}h" for h in intensas) if intensas else "ninguna"))
         lineas.append(f"Ritmo: cada {self.intervalo(cfg) / 60:.1f} min · piso por bloqueos: "
-                      + (f"{self.piso() / 60:.1f} min" if self.piso() else "ninguno")
+                      + (f"{self.piso(cfg) / 60:.1f} min" if self.piso(cfg) else "ninguno")
                       + f" · pausa tras bloqueo: {self.pausa_min(cfg)} min")
-        tope, horas = self.tope_por_hora(), sorted(self.horas_bloqueo())
+        tope, horas = self.tope_por_hora(cfg), sorted(self.horas_bloqueo(cfg))
         lineas.append("Tope por hora: " + (f"{tope} revisiones" if tope else "ninguno")
                       + " · horas con bloqueos: " + (", ".join(f"{h:02d}h" for h in horas) if horas else "ninguna"))
         pausas = self.d["ritmo"].get("pausa_por_frase", {})
@@ -319,6 +353,9 @@ class Aprendizaje:
                           f"{b.get('por_hora') or self._por_hora(datetime.fromisoformat(b['t']))} revisiones en la hora previa")
         for tipo, que in self.d["ritmo"].get("tipos_error", {}).items():
             lineas.append(f"  error «{tipo}»: {'normal, no pregunto' if que == 'normal' else 'cuenta como bloqueo'}")
+        for tipo, f in self._errores_pausa().items():
+            lineas.append(f"  error «{tipo}»: salió {SEGUIDOS_PAUSA} veces seguidas → al aparecer pauso "
+                          f"{self.pausa_error_min(cfg)} min (última: {f.replace('T', ' ')})")
         if self.d.get("proxima"):
             lineas.append(f"Próxima revisión: {self.d['proxima']}")
         return "\n".join(lineas)

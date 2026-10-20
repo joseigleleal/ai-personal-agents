@@ -60,13 +60,13 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   pregunta por Telegram y espera tu respuesta (detectar un bloqueo por el texto de la página a veces falla,
   y subir el ritmo por una falsa alarma lo deja lento sin motivo). Mientras tanto, tras un bloqueo detectado
   pausa `pausa_bloqueo_min` (5 por defecto: lo que bastaba al revisar a mano). Si confirmas que fue bloqueo,
-  el intervalo pasa a `sube_bloqueo` × el que había (1,25 por defecto: subir poco, no duplicar) y ese
-  intervalo queda como **piso** (+25 %) durante 7 días; al caducar, vuelve a probar. De cada bloqueo
-  confirmado aprende además:
-  - **Tope por hora:** cuántas revisiones llevaba en la hora previa; no vuelve a pasar de esa cantidad
-    menos una. Algunos sitios limitan consultas por hora y no por intervalo: con un tope de 10, aunque el
-    piso permita 3 min, revisa cada 6.
-  - **Horas con bloqueos:** si en una hora del día hubo 2 o más en la semana, en esa hora va 1,5× más lento.
+  el intervalo pasa a `sube_bloqueo` × el que había (1,25 por defecto: subir poco, no duplicar) y después
+  **sigue bajando**: los bloqueos se pagan con pausas, no con un ritmo lento (una cita dura segundos).
+  - **Piso opcional** (`ritmo.dias_piso`, 0 por defecto): con un valor > 0, el ritmo del bloqueo (+25 %)
+    queda como piso esos días, y aprende además un **tope por hora** (las revisiones que llevaba en la hora
+    previa, menos una: algunos sitios limitan por hora y no por intervalo) y las **horas con bloqueos**
+    (2 o más en una hora del día → en esa hora va 1,5× más lento). Útil si el sitio castiga los bloqueos
+    repetidos con algo más que una pausa.
   - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (5 por
     defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
     tipo y la próxima vez prueba un 25 % menos.
@@ -76,11 +76,15 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
     la respuesta en el siguiente arranque (≤ 1 min); el mensaje se edita con lo que hizo.
   - Los **errores** (un "Internal Server Error", una página que no carga) también llegan con botones,
     **"🚫 Fue bloqueo" / "⚠️ Error normal"**: un sitio puede frenar en vez de bloquear. Si respondes que fue
-    bloqueo, se aprende como bloqueo confirmado (piso, tope por hora, ritmo ×1,25) y pausa.
+    bloqueo, se aprende como bloqueo confirmado (ritmo ×1,25 y pausa).
     Si no respondes, el bloqueo o error queda sin contar (se ve en `--aprendizaje` como «sin confirmar»).
   - Las capturas normales se sobrescriben (`ultima.png`, `ultima/`); las de bloqueo y falsa alarma se
     conservan en `data/cita/bloqueos/` (captura + HTML, las 50 más recientes). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
   candado evita dos revisiones a la vez.
+- **Errores que se repiten: pausa en vez de reintentar.** Si un mismo tipo de error (paso + causa) sale
+  3 veces seguidas, contando los reintentos, reintentar no lo arregla: el agente pausa `pausa_error_min`
+  (5 por defecto) y luego sigue **al mismo ritmo**. Lo recuerda: la próxima vez que ese tipo aparezca, pausa
+  al primer intento. Lo olvida si pasa 7 días sin salir. Con citas a la vista nunca pausa.
 - **Reintentos en dos niveles.** Cada botón tiene su tiempo de espera; si se agota, el agente reintenta ese
   paso con más tiempo (y si la página siguiente llegó tarde, sigue). Si el paso sigue fallando (o el sitio
   pierde la sesión al volver de Cl@ve), repite el recorrido completo con sesión nueva, hasta `reintentos`
@@ -89,9 +93,9 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
 - **Memoria que aprende, sin modelo de lenguaje** (`aprendizaje.py` → `data/cita/aprendizaje.json`):
   - tiempo de espera por paso: ×1,5 tras agotarse (tope 90 s), −10 % con cada éxito (mínimo 30 s);
   - selector que funcionó en cada botón (hay alternativas por si el sitio cambia el `id`), se prueba primero;
-  - ritmo entre revisiones, piso por bloqueos y pausa (ver "Ritmo aprendido");
+  - ritmo entre revisiones, pausa por bloqueo y por error repetido (ver "Ritmo aprendido");
   - historial de revisiones: horas en que hubo citas → en esa hora y la anterior revisa al doble de ritmo,
-    sin bajar del mínimo ni del piso.
+    sin bajar del mínimo (ni del piso, si está activo).
   Se descartó LangGraph/LangChain aquí: es un recorrido fijo y, cuando aparecen citas, duran segundos; un
   modelo en medio agrega demora e imprevisibilidad justo en el paso que no admite errores.
 - **Ensayo de la reserva.** Las pantallas de la reserva solo se ven cuando hay citas. `tests/test_cita.py`
@@ -217,6 +221,7 @@ ssh oracle 'last -n 10'                                                 # últim
 - Las pantallas posteriores a "hay citas" se escribieron y simularon con los nombres de campos conocidos del
   sitio, pero solo se verifican de verdad cuando aparece una cita real: si algo falla, el aviso dice
   "entra tú ya" y el HTML queda en `data/cita/paginas/` para corregir.
-- Para encontrar el límite, el agente tiene que acercarse a él: es esperable algún bloqueo de vez en cuando
-  (cada 7 días, cuando caduca el piso). Si eso molesta, subir `ritmo.minimo_s`.
+- Para encontrar el límite, el agente tiene que acercarse a él: sin piso, si el sitio bloquea por debajo de
+  cierto ritmo, el agente vuelve a bajar y a chocar (cada choque cuesta una pausa). Si eso molesta, subir
+  `ritmo.minimo_s` o activar `ritmo.dias_piso`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).

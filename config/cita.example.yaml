@@ -5,18 +5,21 @@ tramite_policia: true    # true = lista "Trámites Policía Nacional"
 tramite: "POLICÍA-TOMA DE HUELLAS"   # basta con el inicio del nombre del trámite
 headless: true           # modo fantasma: sin ventana (false = ventana real)
 pausa_bloqueo_min: 5     # si el sitio rechaza el acceso, esperar estos minutos antes de reintentar
+pausa_error_min: 5       # un tipo de error que ya salió 3 veces seguidas: pausar esto en vez de reintentar
 ventana_oculta: true     # solo con headless: false: abre la ventana fuera de la pantalla
 
 # Ritmo (launchd lanza el agente cada 1 min y el agente decide si toca revisar). El ritmo se aprende:
-# cada revisión sin problemas lo acorta `baja_s`. Errores y bloqueos no lo cambian hasta que confirmes por
-# Telegram que fue un bloqueo: entonces lo multiplica por `sube_bloqueo` (y no vuelve a bajar del ritmo del
-# bloqueo +25 % durante 7 días). Ver con: python -m agents.cita.run --aprendizaje
+# cada revisión sin problemas lo acorta `baja_s`, hasta `minimo_s`. Errores y bloqueos no lo cambian hasta que
+# confirmes por Telegram que fue un bloqueo: entonces pausa y lo multiplica por `sube_bloqueo`, y sigue bajando.
+# Con `dias_piso` > 0, además no vuelve a bajar del ritmo del bloqueo (+25 %) durante esos días.
+# Ver con: python -m agents.cita.run --aprendizaje
 ritmo:
   minimo_s: 60                  # nunca más seguido que esto
   maximo_s: 1800                # nunca más espaciado que esto
   inicial_s: 600                # punto de partida, sin nada aprendido
   baja_s: 30                    # cuánto se acorta tras cada revisión sin problemas
   sube_bloqueo: 1.25            # cuánto se alarga tras un bloqueo confirmado
+  dias_piso: 0                  # días que un bloqueo confirmado frena el ritmo (0 = no frena: solo pausa)
 aviso_sin_citas_min: 30         # el ⏳ "sin citas" sale como mucho cada N min (0 = en cada revisión)
 horas_intensas: []              # opcional, ej. [8, 9, 14]: al doble de ritmo (además de las aprendidas)
 reintentos: 2                   # si un recorrido falla antes de Confirmar, se repite hasta N veces
