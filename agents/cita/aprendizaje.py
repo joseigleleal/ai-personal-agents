@@ -15,6 +15,8 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 - Pausa tras un bloqueo, por tipo (la frase que lo delató): si al volver lo bloquean otra vez, la siguiente
   dura el doble; la que funcionó se recuerda para ese tipo y la próxima vez prueba un 25 % menos.
 - A qué horas aparecieron citas: en esas horas (y la anterior) revisa al doble de ritmo, sin bajar del piso.
+- Tipos de error (paso + causa, p. ej. «vuelta_clave | 502 bad gateway»): lo que respondiste en Telegram
+  ("error normal" o "fue bloqueo") se recuerda por tipo, para no volver a preguntar por el mismo.
 - Cuándo toca la próxima revisión (launchd lanza el agente cada 1 min; el agente decide si toca).
 """
 import json
@@ -78,11 +80,14 @@ class Aprendizaje:
 
     # --- Revisiones y horario ------------------------------------------------------------------
     def revision(self, resultado: str, paso: str | None = None, cfg: dict | None = None,
-                 frase: str | None = None) -> None:
-        """resultado: sin_citas | hay_citas | reservada | error | bloqueo. Ajusta el ritmo según cómo fue."""
+                 frase: str | None = None, causa: str | None = None) -> None:
+        """resultado: sin_citas | hay_citas | reservada | error | bloqueo. Ajusta el ritmo según cómo fue.
+        causa: en un error, qué pasó en pocas palabras (junto con el paso forma el tipo de error)."""
         r = {"t": f"{datetime.now():%Y-%m-%dT%H:%M}", "r": resultado, "cada_s": self.intervalo(cfg)}
         if paso:
             r["paso"] = paso
+        if causa:
+            r["causa"] = causa
         self._ajustar_ritmo(resultado, cfg or {}, paso, frase)
         self.d["revisiones"].append(r)
 
@@ -150,11 +155,12 @@ class Aprendizaje:
         bloqueo encubierto: se aprende como un bloqueo confirmado (piso, tope por hora, ritmo un poco más
         lento y pausa)."""
         cfg = cfg or {}
-        r = next((r for r in self.d["revisiones"] if r["t"] == t and r["r"] == "error"), None)
+        r = next((r for r in reversed(self.d["revisiones"]) if r["t"] == t and r["r"] == "error"), None)
         if not r:
             return None
         r["r"] = "bloqueo"
         ritmo = self.d["ritmo"]
+        self._recordar_error(r, "bloqueo")
         frase = f"error en {r.get('paso', '?')}"
         cada = r.get("cada_s", self.intervalo(cfg))
         ritmo.setdefault("bloqueos", []).append({
@@ -164,6 +170,39 @@ class Aprendizaje:
         ritmo["pausa_min"], ritmo["ultima_frase"] = cfg.get("pausa_bloqueo_min", PAUSA_MIN), frase
         return (f"Aprendido como bloqueo: pauso {ritmo['pausa_min']} min y después reviso cada "
                 f"{ritmo['intervalo_s'] / 60:.1f} min.")
+
+    # --- Tipos de error ya respondidos -----------------------------------------------------------
+    @staticmethod
+    def tipo_error(paso: str | None, causa: str | None) -> str:
+        return f"{paso or '?'} | {causa or '?'}"
+
+    def _recordar_error(self, r: dict, que: str) -> None:
+        if r.get("causa"):  # los errores anotados antes de clasificar la causa no forman un tipo
+            self.d["ritmo"].setdefault("tipos_error", {})[self.tipo_error(r.get("paso"), r["causa"])] = que
+
+    def tipo_conocido(self, paso: str | None, causa: str | None) -> str | None:
+        """"normal" o "bloqueo" si ya respondiste por este tipo de error; None si nunca preguntó."""
+        return self.d["ritmo"].get("tipos_error", {}).get(self.tipo_error(paso, causa))
+
+    def error_normal(self, t: str) -> str | None:
+        """Respondiste que el error de la hora `t` es normal: no se vuelve a preguntar por ese tipo."""
+        r = next((r for r in reversed(self.d["revisiones"]) if r["t"] == t and r["r"] == "error"), None)
+        if not r:
+            return None
+        if not r.get("causa"):
+            return "Ok, queda como error normal."
+        self._recordar_error(r, "normal")
+        return (f"Anotado: «{r['causa']}» al {r.get('paso', '?')} es un error normal. "
+                "No te vuelvo a preguntar por ese tipo (salvo que se repita varias veces seguidas).")
+
+    def errores_seguidos(self) -> int:
+        """Revisiones seguidas, desde la última, que terminaron en error."""
+        n = 0
+        for r in reversed(self.d["revisiones"]):
+            if r["r"] != "error":
+                break
+            n += 1
+        return n
 
     def es_falsa_alarma(self, frase: str, paso: str) -> bool:
         return {"frase": frase, "paso": paso} in self.d["ritmo"].get("falsas_alarmas", [])
@@ -278,6 +317,32 @@ class Aprendizaje:
             lineas.append(f"  bloqueo {b['t']}{marca}: «{b.get('frase', '?')}» en {b.get('paso', '?')}, cada "
                           f"{b['cada_s'] / 60:.1f} min, "
                           f"{b.get('por_hora') or self._por_hora(datetime.fromisoformat(b['t']))} revisiones en la hora previa")
+        for tipo, que in self.d["ritmo"].get("tipos_error", {}).items():
+            lineas.append(f"  error «{tipo}»: {'normal, no pregunto' if que == 'normal' else 'cuenta como bloqueo'}")
         if self.d.get("proxima"):
             lineas.append(f"Próxima revisión: {self.d['proxima']}")
+        return "\n".join(lineas)
+
+    def informe(self, horas: int = 24) -> str:
+        """Qué pasó en las últimas `horas`: resultados, errores por tipo y citas vistas (para /informe)."""
+        desde = f"{datetime.now() - timedelta(hours=horas):%Y-%m-%dT%H:%M}"
+        revs = [r for r in self.d["revisiones"] if r["t"] >= desde]
+        if not revs:
+            return f"Sin revisiones en las últimas {horas} h."
+        conteo = Counter(r["r"] for r in revs)
+        lineas = [f"📊 Últimas {horas} h: {len(revs)} revisiones (" + ", ".join(
+            f"{k.replace('_', ' ')}: {v}" for k, v in conteo.most_common()) + ")"]
+        ok = conteo["sin_citas"] + conteo["hay_citas"] + conteo["reservada"]
+        lineas.append(f"Completas: {ok * 100 // len(revs)} %")
+        errores = Counter(self.tipo_error(r.get("paso"), r.get("causa")) for r in revs if r["r"] == "error")
+        if errores:
+            lineas.append("Errores por tipo:")
+            for tipo, n in errores.most_common(8):
+                que = self.d["ritmo"].get("tipos_error", {}).get(tipo)
+                lineas.append(f"  • {tipo} ×{n}" + (f" ({que})" if que else ""))
+        vistas = [r["t"][11:] for r in revs if r["r"] == "hay_citas"]
+        lineas.append("Citas vistas: " + (", ".join(vistas) if vistas else "ninguna"))
+        bloqueos = [r["t"][11:] for r in revs if r["r"] == "bloqueo"]
+        if bloqueos:
+            lineas.append("Bloqueos: " + ", ".join(bloqueos))
         return "\n".join(lineas)

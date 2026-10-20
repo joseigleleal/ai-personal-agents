@@ -81,6 +81,33 @@ def telegram_foto(path, caption: str, agent: str | None = None, silent: bool = F
         return False
 
 
+def telegram_album(paths: list, caption: str, agent: str | None = None, silent: bool = True) -> bool:
+    """Envía hasta 10 imágenes en un solo mensaje (álbum), con el texto en la primera."""
+    paths = list(paths)[:10]
+    if len(paths) < 2:
+        return bool(paths) and telegram_foto(paths[0], caption, agent, silent)
+    suffix = f"_{agent.upper()}" if agent else ""
+    token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
+    chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    global ultimo_error
+    try:
+        files = {f"f{i}": open(p, "rb") for i, p in enumerate(paths)}
+    except OSError as e:
+        ultimo_error = f"no se pudo leer la imagen: {e}"
+        return False
+    try:
+        media = [{"type": "photo", "media": f"attach://f{i}", **({"caption": caption[:1000]} if not i else {})}
+                 for i in range(len(paths))]
+        return _post(f"https://api.telegram.org/bot{token}/sendMediaGroup",
+                     data={"chat_id": chat_id, "media": json.dumps(media), "disable_notification": silent},
+                     files=files, timeout=120)
+    finally:
+        for f in files.values():
+            f.close()
+
+
 def macos(title: str, message: str) -> None:
     if platform.system() != "Darwin":
         return

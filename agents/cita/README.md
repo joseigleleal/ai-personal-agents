@@ -10,7 +10,7 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
 | Frecuencia | launchd lo lanza cada 1 min; revisa según el ritmo aprendido (1–30 min, empieza en 10), las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (avisos; "sin citas" como mucho cada 30 min) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · memoria `data/cita/aprendizaje.json` |
+| Salidas | Telegram (avisos; "sin citas" como mucho cada 30 min; responde comandos) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · historial de capturas por revisión en `data/cita/historial/` (14 días) · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -19,7 +19,8 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
     ──▶ pasarela Cl@ve ──▶ "DNIe / Certificado electrónico" (el agente entrega el .p12)
     ──▶ acEntrada: ¿"no hay citas disponibles"?
           sí ─▶ aviso "⏳ sin citas" y termina
-          no ─▶ 🚨 aviso ─▶ "Copiar a datos solicitante" + país ─▶ Solicitar cita
+          ¿página de error (502, 500…) o desconocida? ─▶ error: repite el recorrido
+          formulario de datos sin ese aviso ─▶ 🚨 aviso con la captura ─▶ "Copiar a datos solicitante" + país ─▶ Solicitar cita
                 ─▶ teléfono y correo ─▶ primer horario ─▶ (código SMS por Telegram) ─▶ Confirmar
                 ─▶ ✅ aviso con fecha/hora y justificante ─▶ crea data/cita/RESERVADA y deja de buscar
 ```
@@ -31,6 +32,11 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   se abre ninguna ventana que se cruce con lo que estás haciendo. Si algún día lo bloquean, `headless: false`
   vuelve a una ventana real ubicada fuera de la vista (`ventana_oculta: true`; macOS a veces la trae de vuelta).
   Para ver qué está viendo, `data/cita/ultima.png` se reemplaza en cada paso con la última pantalla.
+- **"Hay citas" solo si lo ve de verdad.** Antes bastaba con no leer "no hay citas disponibles", y una
+  página "502 Bad Gateway" del sitio pasaba por citas disponibles (5 falsas alarmas en una noche). Ahora
+  exige ver el formulario de datos del solicitante sin ese aviso; una página de error del sitio repite el
+  recorrido y una desconocida se reporta como error. El aviso 🚨 llega **con la captura** de esa pantalla,
+  enviada en paralelo para no demorar la reserva.
 - **Captura por Telegram solo si cambia.** Al final de cada revisión manda `ultima.png` si el resultado es
   distinto al de la última enviada (sin citas, hay citas, error en tal paso, bloqueo). Se descartó comparar la
   imagen o el texto: la misma página varía según el instante de la captura (el aviso "no hay citas" aparece
@@ -103,6 +109,33 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
   confirma. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
   hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
+- **Tipos de error que ya respondiste.** Cada error se clasifica por paso y causa (p. ej. «vuelta_clave |
+  bad gateway», «acceso_clave | no respondió a tiempo»). Lo que respondas con los botones vale para ese
+  tipo: si dijiste "error normal", los siguientes de ese tipo quedan en el log y el historial sin avisar ni
+  preguntar; si dijiste "fue bloqueo", los siguientes se tratan como bloqueo confirmado sin preguntar. Si
+  van 3 revisiones seguidas con error, avisa igual (algo más serio puede estar pasando).
+- **Rechazo marcado como falsa alarma: repite ya.** Si dijiste que «requested url was rejected» en un paso
+  no es bloqueo, el agente ya no espera el botón (hasta 90 s en una página sin salida): repite el recorrido.
+- **Sonido solo en la Mac.** `afplay` no existe en Linux y en el servidor cortaba el recorrido justo después
+  de ver citas; ahora se usa solo si está.
+- **Historial de capturas.** Cada revisión guarda lo que vio en `data/cita/historial/<día>/<hora>_<resultado>/`:
+  sin citas, solo la última pantalla (~200 KB); cualquier otro resultado, todos los pasos con su HTML (~3 MB).
+  Se borra a los `historial_dias` (14): unos 2 GB como máximo. Se piden por Telegram con `/historial` y `/ver`.
+- **Comandos por Telegram.** En el chat del bot del agente (solo atiende tu chat; botones de otros se ignoran):
+
+  | Comando | Qué hace |
+  |---|---|
+  | `/estado` | última revisión, pausa, próxima revisión, resumen de 24 h |
+  | `/informe [horas]` | resultados, % de revisiones completas, errores por tipo, citas vistas, bloqueos |
+  | `/aprendido` | lo mismo que `--aprendizaje`: ritmo, piso, tope por hora, tipos de error |
+  | `/captura` | la última pantalla vista |
+  | `/historial [n]` · `/ver HH:MM [AAAA-MM-DD]` | revisiones guardadas (no "sin citas") y sus capturas en un álbum |
+  | `/log [n]` | últimas líneas del registro |
+  | `/revisar` · `/pausar [horas]` · `/seguir` | revisar ya, pausar, quitar la pausa |
+
+  No hay un proceso escuchando: se leen en cada arranque del agente (cada minuto, salvo durante una
+  revisión), así que responde en 1-2 min. Comandos fijos en vez de un modelo de lenguaje: respuestas
+  exactas, sin costo y sin inventar datos. El menú de comandos de Telegram se registra solo.
 - **Sin spam de errores.** El mismo error se avisa como máximo una vez cada 3 h, en lenguaje claro (en qué paso,
   qué pasó y si tienes que hacer algo; los detalles técnicos quedan en el log); las capturas de cada paso
   quedan en `data/cita/ultima/` para diagnosticar.

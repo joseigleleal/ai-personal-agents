@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright
 from agents.cita import run
 from agents.cita.aprendizaje import BASE_MS, Aprendizaje
 
+AVISAR_REAL = run.avisar
 SITIO = f"https://{run.ICP_HOST}/icpplus/"
 
 
@@ -172,6 +173,27 @@ class Memoria(unittest.TestCase):
         self.assertFalse(self.mem.toca_aviso(30))
         self.assertTrue(self.mem.toca_aviso(0))
 
+    def test_tipo_de_error_respondido_no_se_vuelve_a_preguntar(self):
+        self.mem.revision("error", "vuelta_clave", causa="502 bad gateway")
+        t = self.mem.d["revisiones"][-1]["t"]
+        self.assertIsNone(self.mem.tipo_conocido("vuelta_clave", "502 bad gateway"))
+        self.assertIn("No te vuelvo a preguntar", self.mem.error_normal(t))
+        self.assertEqual(self.mem.tipo_conocido("vuelta_clave", "502 bad gateway"), "normal")
+        self.assertIsNone(self.mem.tipo_conocido("acceso_clave", "502 bad gateway"))  # otro paso, otro tipo
+        self.mem.revision("error", "certificado", causa="no respondió a tiempo")
+        self.mem.error_fue_bloqueo(self.mem.d["revisiones"][-1]["t"], {})
+        self.assertEqual(self.mem.tipo_conocido("certificado", "no respondió a tiempo"), "bloqueo")
+
+    def test_errores_seguidos_e_informe(self):
+        self.mem.revision("sin_citas")
+        for _ in range(3):
+            self.mem.revision("error", "vuelta_clave", causa="sesión caducada")
+        self.assertEqual(self.mem.errores_seguidos(), 3)
+        informe = self.mem.informe(24)
+        self.assertIn("4 revisiones", informe)
+        self.assertIn("vuelta_clave | sesión caducada ×3", informe)
+        self.assertIn("Completas: 25 %", informe)
+
     def test_persiste(self):
         self.mem.revision("error", "clave")
         self.mem.guardar()
@@ -197,12 +219,15 @@ class SitioSimulado(unittest.TestCase):
         for nombre, valor in (("SHOTS", self.tmp / "ultima"), ("VISTA", self.tmp / "ultima.png"),
                               ("VISTA_ENVIADA", self.tmp / "ultima_enviada"),
                               ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas"),
-                              ("BLOQUEOS", self.tmp / "bloqueos"), ("NO_ENVIADOS", self.tmp / "no_enviados.json")):
+                              ("BLOQUEOS", self.tmp / "bloqueos"), ("NO_ENVIADOS", self.tmp / "no_enviados.json"),
+                              ("HISTORIAL", self.tmp / "historial"), ("PAUSE", self.tmp / "pausa_hasta"),
+                              ("LOCK", self.tmp / "corriendo"), ("LOG", self.tmp / "cita.log")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
             self.addCleanup(p.stop)
         (self.tmp / "ultima").mkdir()
-        for nombre, valor in (("avisar", mock.Mock()), ("esperar_codigo_telegram", mock.Mock(return_value="123456"))):
+        for nombre, valor in (("avisar", mock.Mock()), ("avisar_con_foto", mock.Mock()),
+                              ("esperar_codigo_telegram", mock.Mock(return_value="123456"))):
             p = mock.patch.object(run, nombre, valor)
             setattr(self, nombre, p.start())
             self.addCleanup(p.stop)
@@ -242,6 +267,78 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(self.enviados["acGrabarCita"]["txtCodigoVerificacion"], ["123456"])
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["hay_citas", "reservada"])
         self.assertTrue(any(run.PAGINAS.glob("*/*.html")), "debe guardar el HTML de la reserva")
+        self.avisar_con_foto.assert_called_once()  # el aviso de citas lleva la captura de lo que vio
+
+    def test_pagina_de_error_no_es_hay_citas(self):
+        """Pasó de verdad: con un "502 Bad Gateway" en la entrada creía que había citas."""
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "caido")
+
+        caido = "<html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>"
+        with mock.patch.object(run.Flujo, "entrar", entrar), mock.patch.dict(PAGINAS, {"caido": caido}):
+            with self.assertRaises(run.ErrorDelSitio) as e:
+                run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
+        self.assertEqual((e.exception.paso, e.exception.causa), ("entrada", "bad gateway"))
+        self.assertEqual(self.mem.d["revisiones"], [])
+        self.avisar_con_foto.assert_not_called()
+        self.assertIn("página de error «bad gateway»", run.explicar_error(e.exception))
+
+    def test_pagina_desconocida_no_es_hay_citas(self):
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "otra")
+
+        with mock.patch.object(run.Flujo, "entrar", entrar), \
+                mock.patch.dict(PAGINAS, {"otra": "<html><body>Algo distinto</body></html>"}):
+            with self.assertRaises(run.Inesperado):
+                run.recorrido(self.contexto, CFG, self.mem, solo_revisar=True)
+        self.avisar_con_foto.assert_not_called()
+
+    def test_sin_afplay_no_corta_el_aviso(self):
+        with mock.patch.object(run.shutil, "which", return_value=None), \
+                mock.patch.object(run.subprocess, "run") as sonido, \
+                mock.patch.object(run.notify, "telegram", return_value=True):
+            AVISAR_REAL("🚨 prueba", sonido=True)
+        sonido.assert_not_called()
+
+    def test_historial_y_comandos(self):
+        run.VISTA.write_bytes(b"png")
+        (run.SHOTS / "01_entrada.png").write_bytes(b"png")
+        (run.SHOTS / "02_error.png").write_bytes(b"png")
+        hoy = f"{datetime.now():%Y-%m-%d}"
+        viejo = run.HISTORIAL / "2020-01-01" / "0000_sin_citas"
+        viejo.mkdir(parents=True)
+        run.archivar({"t": f"{hoy}T03:02", "r": "error", "paso": "entrada"}, {})
+        run.archivar({"t": f"{hoy}T03:08", "r": "sin_citas"}, {})
+        self.assertFalse(viejo.parent.exists(), "borra los días viejos")
+        self.assertEqual(len(list((run.HISTORIAL / hoy / "0302_error_entrada").glob("*.png"))), 2)
+        self.assertEqual([p.name for p in (run.HISTORIAL / hoy / "0308_sin_citas").iterdir()], ["ultima.png"])
+        self.mem.revision("error", "entrada", causa="bad gateway")
+        with mock.patch.object(run.notify, "telegram", return_value=True) as tg, \
+                mock.patch.object(run.notify, "telegram_album", return_value=True) as album:
+            run.atender_comando("/historial", self.mem, CFG)
+            self.assertIn("03:02 — error entrada", tg.call_args.args[0])
+            self.assertNotIn("sin citas", tg.call_args.args[0])
+            run.atender_comando("/ver 03:02", self.mem, CFG)
+            self.assertEqual(len(album.call_args.args[0]), 2)
+            run.atender_comando("/informe 6", self.mem, CFG)
+            self.assertIn("Últimas 6 h", tg.call_args.args[0])
+            run.atender_comando("/pausar 2", self.mem, CFG)
+            self.assertTrue(run.PAUSE.exists())
+            run.atender_comando("/seguir", self.mem, CFG)
+            self.assertFalse(run.PAUSE.exists())
+            run.atender_comando("/cualquiera", self.mem, CFG)
+            self.assertIn("/informe", tg.call_args.args[0])
+
+    def test_solo_atiende_tu_chat(self):
+        updates = [{"update_id": 1, "message": {"chat": {"id": 999}, "text": "/pausar 5"}},
+                   {"update_id": 2, "message": {"chat": {"id": 42}, "text": "/estado"}}]
+        respuesta = mock.Mock(json=mock.Mock(return_value={"result": updates}))
+        with mock.patch.object(run, "env", lambda k: {"TELEGRAM_BOT_TOKEN": "x", "TELEGRAM_CHAT_ID": "42"}.get(k)), \
+                mock.patch.object(run.requests, "get", return_value=respuesta), \
+                mock.patch.object(run, "atender_comando") as comando, mock.patch.object(run.Aprendizaje, "guardar"):
+            run.leer_respuestas(self.mem, CFG)
+        comando.assert_called_once_with("/estado", self.mem, CFG)
+        self.assertEqual(self.mem.d["tg_offset"], 3)
 
     def test_boton_lento_se_reintenta_con_mas_tiempo(self):
         self.mem.d["pasos"]["oficina"] = {"ok": 0, "fallos": 0, "timeout_ms": 1000}
@@ -282,7 +379,8 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual((e.exception.frase, e.exception.paso), ("too many requests", "acceso_clave"))
         self.assertEqual(len(list(run.BLOQUEOS.glob("*_bloqueo_acceso_clave.png"))), 1)
         self.mem.d["ritmo"]["falsas_alarmas"] = [{"frase": "too many requests", "paso": "acceso_clave"}]
-        flujo.revisar_bloqueo()  # ya no detiene
+        with self.assertRaises(run.ErrorDelSitio):  # ya no pausa: repite el recorrido sin esperar el botón
+            flujo.revisar_bloqueo()
 
     def test_bloqueo_se_envia_con_botones(self):
         run.VISTA.write_bytes(b"png")

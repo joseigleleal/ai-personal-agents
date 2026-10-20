@@ -32,7 +32,7 @@ lineal; LangGraph si tiene ramas, ciclos, pasos largos o pausas para aprobar. Gu
 | Guardar estado / no repetir avisos | `core.db.connect()` (SQLite en `data/agentic.db`) |
 | Un modelo de lenguaje | `core.llm` → Ollama, Groq o Claude según `.env`, con respaldo y tope de gasto |
 | Un modelo vía LangChain | `core.llm_lc.chat_model(...)` + `json_chain(...)`: mismos backends y tope, con `.with_fallbacks()` |
-| Avisar | `core.notify.telegram(texto, "<nombre>")` (bot propio si existe `TELEGRAM_BOT_TOKEN_<NOMBRE>`) |
+| Avisar | `core.notify.telegram(texto, "<nombre>")` (bot propio si existe `TELEGRAM_BOT_TOKEN_<NOMBRE>`); imágenes con `telegram_foto` (admite botones) o `telegram_album` (hasta 10) |
 
 ## 3. Reglas que siguen todos
 

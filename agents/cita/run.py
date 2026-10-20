@@ -12,6 +12,9 @@ Uso:
     python -m agents.cita.run --aprendizaje   # muestra lo aprendido y sale
     python -m agents.cita.run --solo-revisar  # comprueba si hay citas, pero no reserva
     python -m agents.cita.run --reiniciar     # vuelve a buscar después de una reserva
+
+Por el chat del bot también responde comandos (/estado, /informe, /captura, /historial, /ver, /log…):
+ver COMANDOS.
 """
 import argparse
 import base64
@@ -23,6 +26,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import threading
 import time
 import warnings
 from datetime import datetime, timedelta
@@ -58,11 +62,17 @@ BLOQUEOS = WORK / "bloqueos"       # captura y HTML de cada bloqueo (las demás 
 MAX_BLOQUEOS = 50                  # se guardan solo los más recientes
 NO_ENVIADOS = WORK / "no_enviados.json"  # avisos que Telegram no entregó: se resumen en el siguiente arranque
 MAX_NO_ENVIADOS = 20
+HISTORIAL = WORK / "historial"     # capturas de cada revisión, por día (se borran tras `historial_dias`)
+AVISO_FOTO = WORK / "aviso.png"    # copia de la captura que se está enviando (la de VISTA cambia en cada paso)
+LOG = DATA_DIR / "cita.log"
 
 NO_CITAS = "no hay citas disponibles"
 BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
            "intrusion prevention")
 SESION_CADUCADA = "sesión ha caducado"
+# Páginas de error del propio sitio: no dicen "no hay citas" y antes se confundían con que sí las había
+ERRORES_SITIO = ("bad gateway", "internal server error", "service unavailable", "gateway timeout",
+                 "request rejected")
 
 
 class Bloqueado(Exception):
@@ -79,6 +89,10 @@ class SesionCaducada(Exception):
     """El sitio perdió la sesión al volver de Cl@ve: es pasajero, se reintenta el recorrido."""
 
 
+class ErrorDelSitio(Exception):
+    """El sitio respondió con una página de error (502, 500, rechazo…): se reintenta el recorrido."""
+
+
 def log(msg: str) -> None:
     print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}", flush=True)
 
@@ -88,8 +102,24 @@ def avisar(text: str, sonido: bool = False) -> None:
     if not notify.telegram(text, "cita"):
         no_enviado(text.splitlines()[0][:120])
         notify.macos("Cita extranjería", text.splitlines()[0])
-    if sonido:
+    if sonido and shutil.which("afplay"):  # solo en la Mac; en el servidor no existe y cortaba la reserva
         subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
+
+
+def avisar_con_foto(text: str) -> None:
+    """Aviso con la captura de lo que el agente está viendo, enviado en paralelo para no frenar la reserva.
+    Si la foto no sale, manda el texto solo."""
+    try:
+        shutil.copyfile(VISTA, AVISO_FOTO)
+    except OSError:
+        avisar(text, sonido=True)
+        return
+    log(text.replace("\n", " | "))
+
+    def enviar():
+        if not notify.telegram_foto(AVISO_FOTO, text, "cita"):
+            avisar(text)
+    threading.Thread(target=enviar).start()
 
 
 def esperar_codigo_telegram(minutos: int = 8) -> str | None:
@@ -143,6 +173,13 @@ class Flujo:
         except Exception:  # noqa: BLE001 - la captura nunca debe cortar el flujo
             pass
 
+    def error_del_sitio(self) -> None:
+        """Si la página es un error del sitio (502, 500…), lo lanza para repetir el recorrido."""
+        texto = self.texto()[:500]
+        frase = next((f for f in ERRORES_SITIO if f in texto), None)
+        if frase:
+            raise ErrorDelSitio(frase)
+
     def texto(self) -> str:
         try:
             return self.page.inner_text("body").lower()
@@ -152,8 +189,10 @@ class Flujo:
     def revisar_bloqueo(self) -> None:
         frase = next((b for b in BLOCKED if b in self.texto()), None)
         if frase and self.mem.es_falsa_alarma(frase, self.paso):  # tú dijiste que en este paso no lo es
-            log(f"Texto «{frase}» en «{self.paso}»: lo marcaste como falsa alarma, sigo.")
+            # no es bloqueo, pero la página es un rechazo sin salida: esperar el botón era perder hasta 90 s
+            log(f"Texto «{frase}» en «{self.paso}»: lo marcaste como falsa alarma; repito el recorrido.")
             self.foto("falsa_alarma", BLOQUEOS)
+            raise ErrorDelSitio(frase)
         elif frase:
             self.foto("bloqueo", BLOQUEOS)  # la página del bloqueo es la que interesa ver, y se conserva
             raise Bloqueado(f"«{frase}» en {self.page.url}", frase, self.paso)
@@ -185,6 +224,7 @@ class Flujo:
                     f"{self.mem.timeout(paso) / 1000:.0f} s.")
         self.page.wait_for_load_state("domcontentloaded")
         self.revisar_bloqueo()
+        self.error_del_sitio()
         self.mem.exito(paso, sel)
 
     def hay(self, selector: str) -> bool:
@@ -235,8 +275,14 @@ class Flujo:
 
     # --- 2. Datos del solicitante y comprobación de disponibilidad ---------------------------
     def hay_citas(self) -> bool:
+        """Solo dice que hay citas si ve el formulario de datos del solicitante sin el aviso "no hay citas".
+        Antes bastaba con no ver ese aviso, y una página "502 Bad Gateway" pasaba por citas disponibles."""
+        self.paso = "entrada"
         if NO_CITAS in self.texto():
             return False
+        self.error_del_sitio()
+        if not (self.hay("#btnEnviar") or self.hay("#txtIdCitado")):
+            raise Inesperado("La página de entrada no es la esperada (no dice si hay citas)")
         cfg = self.cfg
         self.paso = "datos"
         copiar = self.page.get_by_role("button", name=re.compile("Copiar a datos solicitante", re.I))
@@ -249,7 +295,10 @@ class Flujo:
         if self.hay("#btnEnviar"):
             self.pulsar("datos", "#btnEnviar")
             self.foto("validar")
-        return NO_CITAS not in self.texto()
+        if NO_CITAS in self.texto():
+            return False
+        self.error_del_sitio()
+        return True
 
     def rellenar(self, selector: str, valor: str | None) -> None:
         campo = self.page.locator(selector)
@@ -447,7 +496,8 @@ PASOS = {  # qué hace cada paso, para que los avisos de error se entiendan sin 
     "conexion": "conectar con el sitio de citas", "inicio": "abrir la página de inicio",
     "provincia": "elegir la provincia", "oficina": "elegir la oficina", "tramite": "elegir el trámite",
     "acceso_clave": "entrar a Cl@ve", "certificado": "identificarse con el certificado en Cl@ve",
-    "vuelta_clave": "volver de Cl@ve al sitio de citas", "datos": "llenar tus datos",
+    "vuelta_clave": "volver de Cl@ve al sitio de citas", "entrada": "ver si hay citas",
+    "datos": "llenar tus datos",
     "solicitar": "pedir la cita", "contacto": "poner teléfono y correo",
     "horario": "elegir el horario", "sms": "esperar el código SMS", "confirmar": "confirmar la cita",
 }
@@ -457,12 +507,28 @@ def explicar_error(e: Exception) -> str:
     """Traduce la excepción de un recorrido fallido a una frase clara."""
     if isinstance(e, SesionCaducada):
         return "al volver de Cl@ve, el sitio dijo que la sesión había caducado (falla del sitio, pasa a veces)"
+    if isinstance(e, ErrorDelSitio):
+        return f"el sitio respondió con una página de error «{e}» (falla del sitio, no tuya)"
     texto = str(e).splitlines()[0] if str(e) else type(e).__name__
     if "Timeout" in texto:
         return "la página no respondió a tiempo (el sitio estaba lento o no cargó)"
     if "No volvió de Cl@ve" in texto:
         return "Cl@ve no devolvió al sitio de citas en 2 minutos"
     return texto[:200]
+
+
+def causa_error(e: Exception) -> str:
+    """Causa corta del error; junto con el paso forma el tipo que se recuerda al responder en Telegram."""
+    if isinstance(e, SesionCaducada):
+        return "sesión caducada"
+    if isinstance(e, ErrorDelSitio):
+        return str(e)
+    texto = str(e).splitlines()[0] if str(e) else type(e).__name__
+    if "Timeout" in texto:
+        return "no respondió a tiempo"
+    if "No volvió de Cl@ve" in texto:
+        return "Cl@ve no devolvió"
+    return re.sub(r"\d+", "N", texto)[:60]  # sin números, para que el mismo error sea el mismo tipo
 
 
 def motivo_legible(error: str) -> str:
@@ -510,7 +576,8 @@ def reportar_no_enviados() -> None:
     NO_ENVIADOS.unlink(missing_ok=True)
 
 
-def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: str | None = None) -> None:
+def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: str | None = None,
+                           causa: str | None = None) -> None:
     """Manda la última captura por Telegram solo si el resultado cambió desde la última enviada
     (sin citas → hay citas, error en un paso, bloqueo…). Se compara el resultado y no la imagen ni el texto:
     la misma página varía según el instante de la captura (el aviso "no hay citas" aparece un poco después).
@@ -524,8 +591,10 @@ def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: s
         pregunta = "\n¿Es un bloqueo? Si sí, sigo un poco más lento; si no, retomo ya. Sin tu respuesta no cambio el ritmo."
     elif error_t:
         botones = [("🚫 Fue bloqueo", f"err:si:{error_t}"), ("⚠️ Error normal", f"err:no:{error_t}")]
-        pregunta = "\n¿Fue un bloqueo encubierto? Si sí, pauso y sigo un poco más lento. Sin tu respuesta no cambio el ritmo."
-    texto = f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}." + pregunta
+        pregunta = ("\n¿Fue un bloqueo encubierto? Si sí, pauso y sigo un poco más lento. Sin tu respuesta no "
+                    "cambio el ritmo. Lo que respondas vale para este tipo de error: no te vuelvo a preguntar.")
+    texto = (f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}" + (f" ({causa})" if causa else "")
+             + "." + pregunta)
     if notify.telegram_foto(VISTA, texto, "cita", botones=botones):
         VISTA_ENVIADA.write_text(estado)
         log(f"Captura enviada por Telegram (cambió a «{estado}»).")
@@ -534,8 +603,9 @@ def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: s
 
 
 def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
-    """Lee los botones que pulsaste en Telegram ("¿es un bloqueo?") y aprende de la respuesta.
-    Corre en cada arranque (cada minuto), así la respuesta se aplica en menos de un minuto."""
+    """Lee los botones que pulsaste en Telegram ("¿es un bloqueo?") y aprende de la respuesta, y responde
+    los comandos (/estado, /informe…). Solo atiende tu chat. Corre en cada arranque (cada minuto) que no
+    coincida con una revisión en curso, así responde en uno o dos minutos."""
     token = env("TELEGRAM_BOT_TOKEN_CITA") or env("TELEGRAM_BOT_TOKEN")
     if not token:
         return
@@ -545,9 +615,29 @@ def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
         updates = requests.get(f"{api}/getUpdates", params=params, timeout=20).json().get("result", [])
     except (requests.RequestException, ValueError):
         return
+    tu_chat = str(env("TELEGRAM_CHAT_ID_CITA") or env("TELEGRAM_CHAT_ID") or "")
+    menu = [{"command": l[1:].split()[0], "description": l.split(" — ")[1][:100]}
+            for l in AYUDA.splitlines() if l.startswith("/") and " — " in l]
+    if mem.d.get("menu") != menu:  # el menú que muestra Telegram al escribir "/", solo cuando cambia
+        try:
+            if requests.post(f"{api}/setMyCommands", json={"commands": menu}, timeout=20).ok:
+                mem.d["menu"] = menu
+                mem.guardar()
+        except requests.RequestException:
+            pass
     for u in updates:
         mem.d["tg_offset"] = u["update_id"] + 1
+        msg = u.get("message") or {}
+        if msg.get("text") and str(msg.get("chat", {}).get("id")) == tu_chat:
+            if msg["text"].startswith("/"):
+                log(f"Comando por Telegram: {msg['text'][:40]}")
+                atender_comando(msg["text"], mem, cfg)
+            elif not re.fullmatch(r"\d{4,8}", msg["text"].strip()):  # un código SMS fuera de tiempo se ignora
+                notify.telegram(AYUDA, "cita", silent=True)
+            continue
         q = u.get("callback_query") or {}
+        if str(((q.get("message") or {}).get("chat") or {}).get("id")) != tu_chat:
+            continue  # botones o mensajes de otro chat: se ignoran
         partes = q.get("data", "").split(":", 2)
         if len(partes) != 3 or partes[0] not in ("bloq", "err"):
             continue
@@ -564,7 +654,7 @@ def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                 mem.programar(hasta)
         else:
-            respuesta = "Ok, queda como error normal."
+            respuesta = mem.error_normal(t) or "Ese error ya no está en la memoria."
         log(f"Respuesta en Telegram sobre el {'bloqueo' if tipo == 'bloq' else 'error'} de {t}: "
             f"{'sí' if es_bloqueo else 'no'} es bloqueo.")
         try:
@@ -577,6 +667,114 @@ def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
             pass
     if updates:
         mem.guardar()
+
+
+def archivar(r: dict, cfg: dict, vio_citas: bool = False) -> None:
+    """Guarda en HISTORIAL lo que vio esta revisión, para poder pedirlo después por Telegram (/ver).
+    Sin citas: solo la última pantalla (~200 KB). Otro resultado, o si vio citas aunque luego se agotaran:
+    todos los pasos con su HTML (~3 MB).
+    Borra los días con más de `historial_dias` (14 por defecto)."""
+    try:
+        estado = "hay_citas_" + r["r"] if vio_citas and r["r"] != "hay_citas" else r["r"]
+        estado += f"_{r['paso']}" if r.get("paso") else ""
+        destino = HISTORIAL / r["t"][:10] / f"{r['t'][11:].replace(':', '')}_{estado}"
+        destino.mkdir(parents=True, exist_ok=True)
+        if r["r"] == "sin_citas" and not vio_citas:
+            shutil.copyfile(VISTA, destino / "ultima.png")
+        else:
+            shutil.copytree(SHOTS, destino, dirs_exist_ok=True)
+        limite = f"{datetime.now() - timedelta(days=int(cfg.get('historial_dias', 14))):%Y-%m-%d}"
+        for dia in HISTORIAL.iterdir():
+            if dia.name < limite:
+                shutil.rmtree(dia, ignore_errors=True)
+    except OSError as e:  # el historial nunca debe cortar la revisión
+        log(f"No pude guardar el historial: {e}")
+
+
+def revisiones_guardadas(dia: str | None = None) -> list[Path]:
+    """Carpetas del historial, de la más vieja a la más nueva (de un día AAAA-MM-DD, o de todos)."""
+    dias = [HISTORIAL / dia] if dia else sorted(HISTORIAL.glob("*"))
+    return [c for d in dias if d.is_dir() for c in sorted(d.iterdir()) if c.is_dir()]
+
+
+AYUDA = """Comandos del agente de citas:
+/estado — qué hizo en la última revisión y cuándo toca la próxima
+/informe [horas] — resumen de las últimas horas (24 por defecto): resultados, errores por tipo, citas vistas
+/aprendido — todo lo que aprendió: ritmo, piso, tope por hora, bloqueos, tipos de error
+/captura — la última pantalla que vio
+/historial [n] — las últimas revisiones que no fueron "sin citas" (10 por defecto)
+/ver HH:MM [AAAA-MM-DD] — las capturas de esa revisión (hoy si no das fecha)
+/log [n] — las últimas líneas del registro (20 por defecto)
+/revisar — revisa en el próximo minuto, sin esperar su turno
+/pausar [horas] — deja de revisar (1 h por defecto)
+/seguir — vuelve a revisar (quita la pausa)"""
+
+
+def atender_comando(texto: str, mem: Aprendizaje, cfg: dict) -> None:
+    """Responde un comando escrito en el chat del bot. Los resultados son de solo lectura, salvo
+    /revisar, /pausar y /seguir, que cambian cuándo toca la próxima revisión."""
+    partes = texto.split()
+    cmd, args = partes[0].split("@")[0].lower(), partes[1:]
+    numero = int(args[0]) if args and args[0].isdigit() else None
+    responder = lambda t: notify.telegram(t, "cita", silent=True)  # noqa: E731
+    if cmd == "/estado":
+        r = mem.d["revisiones"][-1] if mem.d["revisiones"] else None
+        lineas = [f"Última revisión: {r['t'].replace('T', ' ')} → {r['r'].replace('_', ' ')}"
+                  + (f" al {PASOS.get(r['paso'], r['paso'])}" if r.get("paso") else "")
+                  + (f" ({r['causa']})" if r.get("causa") else "") if r else "Todavía no hay revisiones."]
+        if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
+            lineas.append(f"⏸️ En pausa hasta {PAUSE.read_text().strip().replace('T', ' ')}")
+        if LOCK.exists():
+            lineas.append("🔄 Hay una revisión en curso.")
+        lineas.append(f"Próxima: {(mem.d.get('proxima') or '?').replace('T', ' ')[:16]} · ritmo "
+                      f"~{mem.intervalo(cfg) / 60:.1f} min")
+        lineas.append(mem.informe(24).split("\n")[0])
+        responder("\n".join(lineas))
+    elif cmd == "/informe":
+        responder(mem.informe(numero or 24))
+    elif cmd == "/aprendido":
+        responder(mem.resumen(cfg))
+    elif cmd == "/captura":
+        if not VISTA.exists() or not notify.telegram_foto(
+                VISTA, f"Última pantalla ({datetime.fromtimestamp(VISTA.stat().st_mtime):%d/%m %H:%M}).",
+                "cita", silent=True):
+            responder("No tengo una captura para enviarte.")
+    elif cmd == "/historial":
+        otras = [c for c in revisiones_guardadas() if "sin_citas" not in c.name][-(numero or 10):]
+        responder("Revisiones guardadas (pide una con /ver HH:MM AAAA-MM-DD):\n" + "\n".join(
+            f"• {c.parent.name} {c.name[:2]}:{c.name[2:4]} — {c.name[5:].replace('_', ' ')}" for c in otras)
+            if otras else "No hay revisiones distintas de \"sin citas\" en el historial.")
+    elif cmd == "/ver":
+        hora = (args[0] if args else "").replace(":", "")
+        dia = args[1] if len(args) > 1 else f"{datetime.now():%Y-%m-%d}"
+        carpeta = next((c for c in reversed(revisiones_guardadas(dia)) if c.name.startswith(hora)), None) \
+            if re.fullmatch(r"\d{4}", hora) else None
+        if not carpeta:
+            responder("No encontré esa revisión. Usa /ver HH:MM [AAAA-MM-DD]; /historial muestra las guardadas.")
+            return
+        fotos = sorted(carpeta.glob("*.png"))
+        if not notify.telegram_album(fotos[-10:], f"{dia} {hora[:2]}:{hora[2:]} — "
+                                     f"{carpeta.name[5:].replace('_', ' ')} ({len(fotos)} pantallas"
+                                     + (", te mando las 10 últimas" if len(fotos) > 10 else "") + ")", "cita"):
+            responder(f"No pude enviar las capturas ({motivo_legible(notify.ultimo_error)}).")
+    elif cmd == "/log":
+        lineas = LOG.read_text(errors="replace").splitlines()[-min(numero or 20, 60):] if LOG.exists() else []
+        responder("\n".join(l[11:] for l in lineas) or "El registro está vacío.")
+    elif cmd == "/revisar":
+        mem.programar(datetime.now())
+        responder("Reviso en el próximo minuto." + (" Ojo: estoy en pausa por bloqueo; usa /seguir para quitarla."
+                                                    if PAUSE.exists() else ""))
+    elif cmd == "/pausar":
+        hasta = datetime.now() + timedelta(hours=numero or 1)
+        PAUSE.write_text(hasta.isoformat(timespec="minutes"))
+        mem.programar(hasta)
+        responder(f"⏸️ Pausado hasta {hasta:%d/%m %H:%M}. /seguir para retomar antes.")
+    elif cmd == "/seguir":
+        PAUSE.unlink(missing_ok=True)
+        mem.programar(datetime.now())
+        responder("▶️ Retomo: reviso en el próximo minuto.")
+    else:
+        responder(AYUDA)
 
 
 def guardar_paginas() -> None:
@@ -616,9 +814,10 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                     vio_citas = True
                     mem.revision("hay_citas", cfg=cfg)
                     mem.guardar()
-                    avisar("🚨 ¡HAY CITAS de toma de huellas en "
-                           f"{cfg['provincia']}! " + ("Entra ya a reservar." if solo_revisar
-                                                      else "Intentando reservar…"), sonido=True)
+                    avisar_con_foto("🚨 ¡HAY CITAS de toma de huellas en "
+                                    f"{cfg['provincia']}! " + ("Entra ya a reservar." if solo_revisar
+                                                               else "Intentando reservar…")
+                                    + "\nEsta es la pantalla en que las vi.")
                 if solo_revisar:
                     return
                 detalle = flujo.reservar()
@@ -633,7 +832,7 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                 flujo.foto("error")
                 n = flujo.n
                 if flujo.confirmando or intento == intentos - 1:
-                    e.paso = flujo.paso
+                    e.paso, e.causa = flujo.paso, causa_error(e)
                     raise
                 espera = 0 if vio_citas else cfg.get("espera_reintento_s", 15) * 2 ** intento
                 log(f"Falló en «{flujo.paso}»: {str(e).splitlines()[0][:150]} — reintento "
@@ -706,16 +905,29 @@ def main() -> None:
                 avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}; "
                        "el ritmo lo ajusto cuando me confirmes si fue un bloqueo.")
             except Exception as e:  # noqa: BLE001 - cualquier fallo se avisa con su captura
-                paso = getattr(e, "paso", "?")
+                paso, causa = getattr(e, "paso", "?"), getattr(e, "causa", None) or causa_error(e)
                 url = contexto.pages[-1].url if contexto.pages else "?"
                 log(f"Error en «{paso}» ({url}): {e}")
-                mem.revision("error", paso, cfg)
+                mem.revision("error", paso, cfg, causa=causa)
                 reservando = any(r["r"] == "hay_citas" and r["t"] >= inicio for r in mem.d["revisiones"])
-                if error_nuevo(str(e)):
+                conocido, seguidos = mem.tipo_conocido(paso, causa), mem.errores_seguidos()
+                if conocido == "bloqueo":  # ya dijiste que este tipo de error es un bloqueo encubierto
+                    t = mem.d["revisiones"][-1]["t"]
+                    log(f"Error «{causa}» en «{paso}»: lo marcaste como bloqueo. "
+                        + (mem.error_fue_bloqueo(t, cfg) or ""))
+                    hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
+                    PAUSE.write_text(hasta.isoformat(timespec="minutes"))
+                    mem.programar(hasta)
+                    avisar(f"⛔ {datetime.now():%H:%M} Cita: «{causa}» al {PASOS.get(paso, paso)}; me dijiste "
+                           f"que eso es un bloqueo, así que pauso hasta {hasta:%H:%M} y sigo un poco más lento.")
+                elif conocido == "normal" and not reservando and seguidos < 3:
+                    log(f"Error «{causa}» en «{paso}»: lo marcaste como normal; no aviso.")
+                elif error_nuevo(str(e)) or (conocido and seguidos == 3):
                     avisar(f"⚠️ {datetime.now():%H:%M} Cita: esta revisión no se pudo completar "
                            f"(probé {1 + int(cfg.get('reintentos', 2))} veces).\n"
                            f"Dónde: al {PASOS.get(paso, paso)}.\n"
                            f"Qué pasó: {explicar_error(e)}.\n"
+                           + (f"Van {seguidos} revisiones seguidas con error.\n" if seguidos >= 3 else "")
                            + ("🚨 ¡Estaba reservando una cita! Entra tú ya: " + ICP if reservando
                               else "No tienes que hacer nada: sigo revisando como siempre."))
             finally:
@@ -723,9 +935,13 @@ def main() -> None:
                 navegador.close()
                 r = mem.d["revisiones"][-1] if mem.d["revisiones"] else {}
                 if r.get("t", "") >= inicio:  # solo si esta corrida llegó a un resultado
-                    enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""),
-                                           r["t"] if r["r"] == "bloqueo" else None,
-                                           r["t"] if r["r"] == "error" else None)
+                    archivar(r, cfg, any(x["r"] == "hay_citas" and x["t"] >= inicio for x in mem.d["revisiones"]))
+                    conocido = r["r"] in ("error", "bloqueo") and mem.tipo_conocido(r.get("paso"), r.get("causa"))
+                    if not conocido or mem.errores_seguidos() >= 3:  # error ya respondido: no se pregunta de nuevo
+                        enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""),
+                                               r["t"] if r["r"] == "bloqueo" else None,
+                                               r["t"] if r["r"] == "error" and not conocido else None,
+                                               r.get("causa"))
     finally:
         if not PAUSE.exists() or datetime.now() >= datetime.fromisoformat(PAUSE.read_text().strip()):
             log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min)")

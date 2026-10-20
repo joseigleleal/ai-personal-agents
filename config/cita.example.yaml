@@ -21,6 +21,7 @@ aviso_sin_citas_min: 30         # el ⏳ "sin citas" sale como mucho cada N min 
 horas_intensas: []              # opcional, ej. [8, 9, 14]: al doble de ritmo (además de las aprendidas)
 reintentos: 2                   # si un recorrido falla antes de Confirmar, se repite hasta N veces
 espera_reintento_s: 15          # espera antes del 1.er reintento (se duplica); con citas a la vista, 0
+historial_dias: 14              # capturas de cada revisión en data/cita/historial/ (se piden con /ver por Telegram)
 
 # Datos del solicitante. Con Cl@ve el NIE y el nombre suelen venir rellenados.
 nie: ""
