@@ -90,17 +90,25 @@ class Memoria(unittest.TestCase):
         self.assertEqual(self.mem.intervalo(), 60)  # 600 s - 30 × 30 s, con tope en el mínimo
         self.mem.revision("error", "inicio")
         self.mem.revision("bloqueo")
-        self.assertEqual((self.mem.intervalo(), self.mem.piso(), self.mem.tope_por_hora()), (60, 0, None))
+        self.assertEqual((self.mem.intervalo(), self.mem.piso()), (60, 0))
         self.mem.respuesta_bloqueo(self.mem.d["ritmo"]["bloqueos"][-1]["t"], es_bloqueo=True)
-        self.assertEqual(self.mem.intervalo(), 75)  # ×1,25 del ritmo al que bloqueó
-        self.assertEqual(self.mem.piso(), 0)  # sin `dias_piso`, sigue bajando
-        self.mem.revision("sin_citas")
-        self.assertEqual(self.mem.intervalo(), 60)
-        cfg = {"ritmo": {"dias_piso": 7}}
-        self.assertEqual(self.mem.piso(cfg), 75)  # con piso: bloqueó a 60 s, no baja de 75 s en 7 días
+        self.assertEqual((self.mem.intervalo(), self.mem.piso()), (72, 72))  # ×1,2 del ritmo al que bloqueó
+        self.assertEqual(self.mem.piso({"ritmo": {"dias_piso": 0}}), 0)  # sin memoria de bloqueos, sigue bajando
         for _ in range(10):
-            self.mem.revision("sin_citas", cfg=cfg)
-        self.assertEqual(self.mem.intervalo(cfg), 75)
+            self.mem.revision("sin_citas")
+        self.assertEqual(self.mem.intervalo(), 72)  # no vuelve a bajar del piso
+
+    def test_piso_sube_por_escalones_hasta_que_no_bloquea(self):
+        self.mem.d["ritmo"]["intervalo_s"] = 60
+        for n, esperado in enumerate((72, 86, 103), 1):  # cada bloqueo estando en el piso lo sube otro ×1,2
+            for b in self.mem.d["ritmo"].get("bloqueos", []):  # los anteriores, minutos antes (se buscan por hora)
+                b["t"] = f"{datetime.now() - timedelta(minutes=10 * n):%Y-%m-%dT%H:%M}"
+            self.mem.revision("bloqueo", frase="too many requests")
+            self.mem.respuesta_bloqueo(self.mem.d["ritmo"]["bloqueos"][-1]["t"], es_bloqueo=True)
+            self.mem.revision("sin_citas")
+            self.assertEqual((self.mem.piso(), self.mem.intervalo()), (esperado, esperado))
+        cuando = self.mem.programar_siguiente({})
+        self.assertGreaterEqual(cuando, datetime.now() + timedelta(seconds=103 * 0.8 - 1))
 
     def test_error_repetido_aprende_a_pausar(self):
         self.assertFalse(self.mem.error_repetido("tramite", "no respondió a tiempo"))
@@ -128,23 +136,6 @@ class Memoria(unittest.TestCase):
         self.mem.revision("sin_citas", cfg=cfg)
         self.assertEqual(self.mem.pausa_min(cfg), 15)
 
-    def test_tope_por_hora_y_horas_con_bloqueos(self):
-        cfg = {"ritmo": {"dias_piso": 7}}
-        for _ in range(9):
-            self.mem.revision("sin_citas")
-        self.mem.revision("bloqueo", "acceso_clave", frase="too many requests")
-        self.assertIsNone(self.mem.tope_por_hora(cfg))  # sin confirmar no cuenta
-        self.mem.d["ritmo"]["bloqueos"][-1]["confirmado"] = True
-        self.assertEqual(self.mem.tope_por_hora(cfg), 9)  # bloqueó con 10 en la hora: máximo 9
-        self.assertIsNone(self.mem.tope_por_hora())  # sin `dias_piso` no hay tope
-        self.assertEqual(self.mem.d["ritmo"]["bloqueos"][-1]["paso"], "acceso_clave")
-        self.assertEqual(self.mem.horas_bloqueo(cfg), set())
-        self.mem.revision("bloqueo", frase="too many requests")
-        self.mem.d["ritmo"]["bloqueos"][-1]["confirmado"] = True
-        self.assertEqual(self.mem.horas_bloqueo(cfg), {datetime.now().hour})
-        cuando = self.mem.programar_siguiente(cfg)
-        self.assertGreaterEqual(cuando, datetime.now() + timedelta(seconds=3600 // 9 - 1))
-
     def test_pausa_por_tipo_de_bloqueo(self):
         cfg = {"pausa_bloqueo_min": 15}
         for _ in range(3):  # se repite al volver: 15 → 30 → 60
@@ -163,7 +154,7 @@ class Memoria(unittest.TestCase):
         t = self.mem.d["ritmo"]["bloqueos"][-1]["t"]
         self.assertEqual((self.mem.intervalo(), self.mem.piso()), (240, 0))  # sin confirmar: no cambia
         self.assertIn("falsa alarma", self.mem.respuesta_bloqueo(t, es_bloqueo=False))
-        self.assertEqual((self.mem.intervalo(), self.mem.piso(), self.mem.tope_por_hora()), (240, 0, None))
+        self.assertEqual((self.mem.intervalo(), self.mem.piso()), (240, 0))
         self.assertTrue(self.mem.es_falsa_alarma("too many requests", "acceso_clave"))
         self.assertIsNone(self.mem.respuesta_bloqueo(t, es_bloqueo=True))  # ya no está
 
@@ -171,7 +162,7 @@ class Memoria(unittest.TestCase):
         self.mem.d["ritmo"]["intervalo_s"] = 360
         self.mem.revision("bloqueo", "acceso_clave", frase="too many requests")
         t = self.mem.d["ritmo"]["bloqueos"][-1]["t"]
-        self.assertIn("7.5 min", self.mem.respuesta_bloqueo(t, es_bloqueo=True))
+        self.assertIn("7.2 min", self.mem.respuesta_bloqueo(t, es_bloqueo=True))
         self.assertTrue(self.mem.d["ritmo"]["bloqueos"][-1]["confirmado"])
         self.assertEqual(self.mem.respuesta_bloqueo(t, es_bloqueo=True), "Ya estaba confirmado.")
         self.assertFalse(self.mem.es_falsa_alarma("too many requests", "acceso_clave"))
@@ -183,7 +174,7 @@ class Memoria(unittest.TestCase):
         self.assertEqual(self.mem.intervalo(cfg), 240)
         t = self.mem.d["revisiones"][-1]["t"]
         self.assertIn("Aprendido como bloqueo", self.mem.error_fue_bloqueo(t, cfg))
-        self.assertEqual((self.mem.intervalo(cfg), self.mem.piso(cfg), self.mem.pausa_min(cfg)), (300, 0, 5))
+        self.assertEqual((self.mem.intervalo(cfg), self.mem.piso(cfg), self.mem.pausa_min(cfg)), (288, 288, 5))
         self.assertEqual(self.mem.d["revisiones"][-1]["r"], "bloqueo")
         self.assertIsNone(self.mem.error_fue_bloqueo(t, cfg))  # ya no es un error
 

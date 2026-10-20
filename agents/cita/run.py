@@ -700,7 +700,7 @@ def revisiones_guardadas(dia: str | None = None) -> list[Path]:
 AYUDA = """Comandos del agente de citas:
 /estado — qué hizo en la última revisión y cuándo toca la próxima
 /informe [horas] — resumen de las últimas horas (24 por defecto): resultados, errores por tipo, citas vistas
-/aprendido — todo lo que aprendió: ritmo, piso, tope por hora, bloqueos, tipos de error
+/aprendido — todo lo que aprendió: ritmo, piso, bloqueos, tipos de error
 /captura — la última pantalla que vio
 /historial [n] — las últimas revisiones que no fueron "sin citas" (10 por defecto)
 /ver HH:MM [AAAA-MM-DD] — las capturas de esa revisión (hoy si no das fecha)
@@ -955,7 +955,9 @@ def main() -> None:
                                                r.get("causa"))
     finally:
         if not PAUSE.exists() or datetime.now() >= datetime.fromisoformat(PAUSE.read_text().strip()):
-            log(f"Próxima revisión: {mem.programar_siguiente(cfg):%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min)")
+            cuando, piso = mem.programar_siguiente(cfg), mem.piso(cfg)
+            log(f"Próxima revisión: {cuando:%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min"
+                + (f", piso aprendido {piso / 60:.1f} min" if piso else "") + ")")
         mem.guardar()
         LOCK.unlink(missing_ok=True)
 

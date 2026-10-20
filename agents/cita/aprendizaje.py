@@ -6,11 +6,11 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 - Qué selector de cada botón funcionó la última vez, para probarlo primero.
 - Ritmo entre revisiones: cada revisión sin problemas lo acorta un poco (hasta 1 min). Un error o un
   bloqueo no lo cambian por sí solos: se pregunta por Telegram y solo si confirmas que fue un bloqueo
-  lo alarga un poco (×1,25 por defecto). Mientras tanto, tras un bloqueo detectado pausa unos minutos,
-  y después sigue bajando. Los bloqueos sin confirmar no cuentan para nada de esto.
-- Piso y tope por hora (opcionales, `ritmo.dias_piso` > 0): el ritmo de un bloqueo confirmado queda como
-  "piso" esos días (+25 %), y no pasa de las revisiones por hora que llevaba al bloquear, menos una.
-  Por defecto (0) no hay piso: el ritmo sigue buscando el mínimo y los bloqueos se pagan con pausas.
+  lo alarga un poco (×1,2 por defecto). Mientras tanto, tras un bloqueo detectado pausa unos minutos.
+  Los bloqueos sin confirmar no cuentan para nada de esto.
+- Piso aprendido: el ritmo de un bloqueo confirmado ×1,2 queda como piso (`ritmo.dias_piso` días, 7 por
+  defecto): no vuelve a bajar de ahí. Si lo bloquean otra vez estando en el piso, el piso sube otro ×1,2
+  (1 → 1,2 → 1,44 min…), hasta dar con un ritmo que el sitio acepte. Al olvidarlo, vuelve a probar el límite.
 - Errores que se repiten: si un mismo tipo de error sale 3 veces seguidas (contando los reintentos), se
   aprende; desde entonces, apenas aparece, pausa `pausa_error_min` (5) en vez de reintentar, y luego sigue
   con el mismo ritmo. Se olvida si pasa 7 días sin aparecer.
@@ -37,8 +37,8 @@ DIAS_PISO = 7           # cuánto se recuerda el ritmo al que hubo un bloqueo
 PAUSA_MIN = 5          # pausa base tras un bloqueo (se sobrescribe con `pausa_bloqueo_min` del yaml)
 PAUSA_ERROR_MIN = 5    # pausa ante un error que ya se repitió (se sobrescribe con `pausa_error_min` del yaml)
 SEGUIDOS_PAUSA = 3     # veces seguidas que un tipo de error tiene que salir para aprender a pausar
-RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube_bloqueo": 1.25,
-         "dias_piso": 0}  # se sobrescribe con `ritmo:` del yaml
+RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube_bloqueo": 1.2,
+         "dias_piso": 7}  # se sobrescribe con `ritmo:` del yaml
 
 
 class Aprendizaje:
@@ -118,20 +118,16 @@ class Aprendizaje:
         return [b for b in bloqueos if b.get("confirmado", True) and dias and b["t"] >= desde]
 
     def piso(self, cfg: dict | None = None) -> int:
-        """Ritmo mínimo seguro: el más lento al que hubo un bloqueo confirmado en `dias_piso` días, +25 %."""
-        return int(max((b["cada_s"] for b in self._bloqueos(cfg)), default=0) * 1.25)
+        """Ritmo mínimo seguro: el más lento al que hubo un bloqueo confirmado en `dias_piso` días, × `sube_bloqueo`.
+        Un bloqueo estando ya en el piso lo sube otro escalón."""
+        cada = max((b["cada_s"] for b in self._bloqueos(cfg)), default=0)
+        return int(cada * self._limites(cfg)["sube_bloqueo"])
 
     def _por_hora(self, hasta: datetime | None = None) -> int:
         """Revisiones en los 60 min previos a `hasta` (por defecto, ahora)."""
         hasta = hasta or datetime.now()
         desde, fin = f"{hasta - timedelta(hours=1):%Y-%m-%dT%H:%M}", f"{hasta:%Y-%m-%dT%H:%M}"
         return sum(1 for r in self.d["revisiones"] if desde <= r["t"] <= fin)
-
-    def tope_por_hora(self, cfg: dict | None = None) -> int | None:
-        """Máximo de revisiones por hora: una menos que las que llevaba en el bloqueo más exigente (7 días).
-        Los bloqueos anotados antes de contar (sin `por_hora`) se calculan con el historial."""
-        cuentas = [b.get("por_hora") or self._por_hora(datetime.fromisoformat(b["t"])) for b in self._bloqueos(cfg)]
-        return max(1, min(cuentas) - 1) if cuentas else None
 
     def respuesta_bloqueo(self, t: str, es_bloqueo: bool, cfg: dict | None = None) -> str | None:
         """Lo que respondiste en Telegram sobre el bloqueo anotado a la hora `t`.
@@ -240,11 +236,6 @@ class Aprendizaje:
     def es_falsa_alarma(self, frase: str, paso: str) -> bool:
         return {"frase": frase, "paso": paso} in self.d["ritmo"].get("falsas_alarmas", [])
 
-    def horas_bloqueo(self, cfg: dict | None = None) -> set[int]:
-        """Horas del día con 2 o más bloqueos confirmados en `dias_piso` días."""
-        horas = Counter(int(b["t"][11:13]) for b in self._bloqueos(cfg))
-        return {h for h, n in horas.items() if n >= 2}
-
     def pausa_min(self, cfg: dict | None = None) -> int:
         """Minutos de pausa tras un bloqueo: la base de la config, o lo aprendido si se repitieron."""
         return int(self.d["ritmo"].get("pausa_min", (cfg or {}).get("pausa_bloqueo_min", PAUSA_MIN)))
@@ -310,11 +301,6 @@ class Aprendizaje:
         intensas = self.horas_intensas(cfg.get("horas_intensas") or ())
         if datetime.now().hour in intensas or (datetime.now() + timedelta(seconds=segundos)).hour in intensas:
             segundos = max(self._limites(cfg)["minimo_s"], self.piso(cfg), segundos // 2)
-        if datetime.now().hour in self.horas_bloqueo(cfg):
-            segundos = int(segundos * 1.5)
-        tope = self.tope_por_hora(cfg)
-        if tope:  # repartir las revisiones permitidas en la hora
-            segundos = max(segundos, 3600 // tope)
         cuando = datetime.now() + timedelta(seconds=segundos * random.uniform(0.8, 1.2))
         self.programar(cuando)
         return cuando
@@ -337,9 +323,6 @@ class Aprendizaje:
         lineas.append(f"Ritmo: cada {self.intervalo(cfg) / 60:.1f} min · piso por bloqueos: "
                       + (f"{self.piso(cfg) / 60:.1f} min" if self.piso(cfg) else "ninguno")
                       + f" · pausa tras bloqueo: {self.pausa_min(cfg)} min")
-        tope, horas = self.tope_por_hora(cfg), sorted(self.horas_bloqueo(cfg))
-        lineas.append("Tope por hora: " + (f"{tope} revisiones" if tope else "ninguno")
-                      + " · horas con bloqueos: " + (", ".join(f"{h:02d}h" for h in horas) if horas else "ninguna"))
         pausas = self.d["ritmo"].get("pausa_por_frase", {})
         if pausas:
             lineas.append("Pausa que funcionó por tipo: " + ", ".join(f"«{f}» {m} min" for f, m in pausas.items()))

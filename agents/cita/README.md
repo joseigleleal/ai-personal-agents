@@ -60,13 +60,12 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   pregunta por Telegram y espera tu respuesta (detectar un bloqueo por el texto de la página a veces falla,
   y subir el ritmo por una falsa alarma lo deja lento sin motivo). Mientras tanto, tras un bloqueo detectado
   pausa `pausa_bloqueo_min` (5 por defecto: lo que bastaba al revisar a mano). Si confirmas que fue bloqueo,
-  el intervalo pasa a `sube_bloqueo` × el que había (1,25 por defecto: subir poco, no duplicar) y después
-  **sigue bajando**: los bloqueos se pagan con pausas, no con un ritmo lento (una cita dura segundos).
-  - **Piso opcional** (`ritmo.dias_piso`, 0 por defecto): con un valor > 0, el ritmo del bloqueo (+25 %)
-    queda como piso esos días, y aprende además un **tope por hora** (las revisiones que llevaba en la hora
-    previa, menos una: algunos sitios limitan por hora y no por intervalo) y las **horas con bloqueos**
-    (2 o más en una hora del día → en esa hora va 1,5× más lento). Útil si el sitio castiga los bloqueos
-    repetidos con algo más que una pausa.
+  el intervalo pasa a `sube_bloqueo` × el que había (1,2 por defecto: subir poco, no duplicar) y ese valor
+  queda como **piso aprendido**: no vuelve a bajar de ahí. Si lo bloquean otra vez estando en el piso, el piso
+  sube otro escalón (1 → 1,2 → 1,44 → 1,73 min…), hasta dar con un ritmo que el sitio acepte. Sin piso, bajar
+  a 1 min y pagar cada «429 Too Many Requests» con una pausa solo repetía el choque cada 20-30 min. El piso se
+  recuerda `ritmo.dias_piso` días (7 por defecto) y después vuelve a probar el límite; con 0 no recuerda nada
+  (cada bloqueo es solo una pausa).
   - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (5 por
     defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
     tipo y la próxima vez prueba un 25 % menos.
@@ -76,7 +75,7 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
     la respuesta en el siguiente arranque (≤ 1 min); el mensaje se edita con lo que hizo.
   - Los **errores** (un "Internal Server Error", una página que no carga) también llegan con botones,
     **"🚫 Fue bloqueo" / "⚠️ Error normal"**: un sitio puede frenar en vez de bloquear. Si respondes que fue
-    bloqueo, se aprende como bloqueo confirmado (ritmo ×1,25 y pausa).
+    bloqueo, se aprende como bloqueo confirmado (piso ×1,2 y pausa).
     Si no respondes, el bloqueo o error queda sin contar (se ve en `--aprendizaje` como «sin confirmar»).
   - Las capturas normales se sobrescriben (`ultima.png`, `ultima/`); las de bloqueo y falsa alarma se
     conservan en `data/cita/bloqueos/` (captura + HTML, las 50 más recientes). Todo se ajusta en `ritmo:` de `config/cita.yaml`. Un
@@ -131,7 +130,7 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   |---|---|
   | `/estado` | última revisión, pausa, próxima revisión, resumen de 24 h |
   | `/informe [horas]` | resultados, % de revisiones completas, errores por tipo, citas vistas, bloqueos |
-  | `/aprendido` | lo mismo que `--aprendizaje`: ritmo, piso, tope por hora, tipos de error |
+  | `/aprendido` | lo mismo que `--aprendizaje`: ritmo, piso, bloqueos, tipos de error |
   | `/captura` | la última pantalla vista |
   | `/historial [n]` · `/ver HH:MM [AAAA-MM-DD]` | revisiones guardadas (no "sin citas") y sus capturas en un álbum |
   | `/log [n]` | últimas líneas del registro |
@@ -221,7 +220,7 @@ ssh oracle 'last -n 10'                                                 # últim
 - Las pantallas posteriores a "hay citas" se escribieron y simularon con los nombres de campos conocidos del
   sitio, pero solo se verifican de verdad cuando aparece una cita real: si algo falla, el aviso dice
   "entra tú ya" y el HTML queda en `data/cita/paginas/` para corregir.
-- Para encontrar el límite, el agente tiene que acercarse a él: sin piso, si el sitio bloquea por debajo de
-  cierto ritmo, el agente vuelve a bajar y a chocar (cada choque cuesta una pausa). Si eso molesta, subir
-  `ritmo.minimo_s` o activar `ritmo.dias_piso`.
+- Para encontrar el límite, el agente tiene que chocar con él: hasta que el piso llega al ritmo que el sitio
+  acepta hay varios bloqueos (cada uno cuesta una pausa), y vuelve a probar cuando caduca el piso. Si eso
+  molesta, subir `ritmo.sube_bloqueo` (escalones más grandes), `ritmo.dias_piso` o `ritmo.minimo_s`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).
