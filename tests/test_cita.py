@@ -110,6 +110,18 @@ class Memoria(unittest.TestCase):
         cuando = self.mem.programar_siguiente({})
         self.assertGreaterEqual(cuando, datetime.now() + timedelta(seconds=103 * 0.8 - 1))
 
+    def test_piso_baja_suave_sin_bloqueos(self):
+        hace = lambda h: f"{datetime.now() - timedelta(hours=h):%Y-%m-%dT%H:%M}"  # noqa: E731
+        self.mem.d["ritmo"]["bloqueos"] = [{"t": hace(5), "cada_s": 150, "confirmado": True}]
+        self.mem.d["ritmo"]["piso_desde"] = hace(30)
+        self.assertEqual(self.mem.piso(), 156)  # 180 s, 2 bajadas de 12 s (5 h)
+        self.mem.d["ritmo"]["piso_desde"] = hace(1)  # un piso aprendido antes de esta versión no cae de golpe
+        self.assertEqual(self.mem.piso(), 180)
+        self.mem.d["ritmo"]["piso_desde"] = hace(30)
+        self.mem.d["ritmo"]["bloqueos"][0]["t"] = hace(40)
+        self.assertEqual(self.mem.piso(), 60)  # nunca bajo el mínimo
+        self.assertEqual(self.mem.piso({"ritmo": {"horas_baja_piso": 0}}), 180)  # 0 = no baja
+
     def test_error_repetido_aprende_a_pausar(self):
         self.assertFalse(self.mem.error_repetido("tramite", "no respondió a tiempo"))
         self.assertFalse(self.mem.error_repetido("tramite", "no respondió a tiempo"))
@@ -235,7 +247,8 @@ class SitioSimulado(unittest.TestCase):
                               ("DONE", self.tmp / "RESERVADA"), ("PAGINAS", self.tmp / "paginas"),
                               ("BLOQUEOS", self.tmp / "bloqueos"), ("NO_ENVIADOS", self.tmp / "no_enviados.json"),
                               ("HISTORIAL", self.tmp / "historial"), ("PAUSE", self.tmp / "pausa_hasta"),
-                              ("LOCK", self.tmp / "corriendo"), ("LOG", self.tmp / "cita.log")):
+                              ("LOCK", self.tmp / "corriendo"), ("LOG", self.tmp / "cita.log"),
+                              ("DATOS_EXTRA", self.tmp / "datos_extra.json")):
             p = mock.patch.object(run, nombre, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -282,6 +295,30 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["hay_citas", "reservada"])
         self.assertTrue(any(run.PAGINAS.glob("*/*.html")), "debe guardar el HTML de la reserva")
         self.avisar_con_foto.assert_called_once()  # el aviso de citas lleva la captura de lo que vio
+
+    def test_dato_que_falta_lo_pregunta_y_lo_recuerda(self):
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "acEntrada")
+
+        formulario = form("acOfertarCita", """
+            <input id='txtTelefonoCitado' name='txtTelefonoCitado'>
+            <input id='emailUNO' name='emailUNO'><input id='emailDOS' name='emailDOS'>
+            <label for='txtAnnoCitado'>Año de nacimiento:</label><input id='txtAnnoCitado' name='txtAnnoCitado'>
+            <select id='txtSexo' name='txtSexo'><option value=''>Seleccione</option><option value='M'>Masculino</option>
+                <option value='F'>Femenino</option></select>
+            <textarea id='txtObservaciones' name='txtObservaciones'></textarea>""")
+        respuestas = mock.Mock(side_effect=["1990", "1"])
+        with mock.patch.object(run.Flujo, "entrar", entrar), mock.patch.dict(PAGINAS, {"acVerFormulario": formulario}), \
+                mock.patch.object(run, "esperar_respuesta_telegram", respuestas):
+            run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
+            self.assertEqual(self.enviados["acOfertarCita"]["txtAnnoCitado"], ["1990"])
+            self.assertEqual(self.enviados["acOfertarCita"]["txtSexo"], ["M"])
+            self.assertIn("Año de nacimiento", self.avisar_con_foto.call_args_list[1].args[0])
+            self.assertIn("1. Masculino", self.avisar.call_args_list[0].args[0])
+            run.DONE.unlink()
+            run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)  # la segunda vez no pregunta
+        self.assertEqual(respuestas.call_count, 2)
+        self.assertEqual(json.loads(run.DATOS_EXTRA.read_text())["#txtSexo"]["valor"], "Masculino")
 
     def test_pagina_de_error_no_es_hay_citas(self):
         """Pasó de verdad: con un "502 Bad Gateway" en la entrada creía que había citas."""

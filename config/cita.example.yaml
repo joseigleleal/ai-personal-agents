@@ -20,10 +20,13 @@ ritmo:
   baja_s: 30                    # cuánto se acorta tras cada revisión sin problemas
   sube_bloqueo: 1.2             # cuánto sube el ritmo (y el piso) tras un bloqueo confirmado
   dias_piso: 7                  # días que se recuerda el piso de un bloqueo (0 = no frena: solo pausa)
+  horas_baja_piso: 2            # cada N horas sin bloqueos el piso baja un poco (0 = no baja)
+  baja_piso_s: 12               # cuánto baja el piso cada vez (12 s: 3,0 → 2,8 → 2,6 min…)
 aviso_sin_citas_min: 30         # el ⏳ "sin citas" sale como mucho cada N min (0 = en cada revisión)
 horas_intensas: []              # opcional, ej. [8, 9, 14]: al doble de ritmo (además de las aprendidas)
 reintentos: 2                   # si un recorrido falla antes de Confirmar, se repite hasta N veces
 espera_reintento_s: 15          # espera antes del 1.er reintento (se duplica); con citas a la vista, 0
+espera_dato_min: 4              # si el formulario pide un dato que no está aquí, te lo pregunta por Telegram y espera esto
 historial_dias: 14              # capturas de cada revisión en data/cita/historial/ (se piden con /ver por Telegram)
 
 # Datos del solicitante. Con Cl@ve el NIE y el nombre suelen venir rellenados.

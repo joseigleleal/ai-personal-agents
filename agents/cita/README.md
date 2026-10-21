@@ -21,7 +21,7 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
           sí ─▶ aviso "⏳ sin citas" y termina
           ¿página de error (502, 500…) o desconocida? ─▶ error: repite el recorrido
           formulario de datos sin ese aviso ─▶ 🚨 aviso con la captura ─▶ "Copiar a datos solicitante" + país ─▶ Solicitar cita
-                ─▶ teléfono y correo ─▶ primer horario ─▶ (código SMS por Telegram) ─▶ Confirmar
+                ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram) ─▶ primer horario ─▶ (código SMS por Telegram) ─▶ Confirmar
                 ─▶ ✅ aviso con fecha/hora y justificante ─▶ crea data/cita/RESERVADA y deja de buscar
 ```
 
@@ -63,9 +63,12 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   el intervalo pasa a `sube_bloqueo` × el que había (1,2 por defecto: subir poco, no duplicar) y ese valor
   queda como **piso aprendido**: no vuelve a bajar de ahí. Si lo bloquean otra vez estando en el piso, el piso
   sube otro escalón (1 → 1,2 → 1,44 → 1,73 min…), hasta dar con un ritmo que el sitio acepte. Sin piso, bajar
-  a 1 min y pagar cada «429 Too Many Requests» con una pausa solo repetía el choque cada 20-30 min. El piso se
-  recuerda `ritmo.dias_piso` días (7 por defecto) y después vuelve a probar el límite; con 0 no recuerda nada
-  (cada bloqueo es solo una pausa).
+  a 1 min y pagar cada «429 Too Many Requests» con una pausa solo repetía el choque cada 20-30 min.
+  El piso **baja suave**: cada `ritmo.horas_baja_piso` (2) sin bloqueos confirmados baja `ritmo.baja_piso_s`
+  (12 s): 3,0 → 2,8 → 2,6 min… Así vuelve a probar el límite poco a poco; antes el piso duraba 7 días entero y
+  al caducar el ritmo saltaba de golpe al mínimo, justo lo que había provocado los bloqueos. Con
+  `horas_baja_piso: 0` no baja. Se olvida a los `ritmo.dias_piso` días (7); con 0 no hay piso (cada bloqueo es
+  solo una pausa).
   - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (5 por
     defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
     tipo y la próxima vez prueba un 25 % menos.
@@ -112,6 +115,13 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
   confirma. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
   hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
+- **Datos que faltan, por Telegram.** Antes de enviar cada formulario (datos del solicitante, oficina, contacto,
+  confirmar) busca campos visibles que sigan vacíos: un dato que el sitio pide y `config/cita.yaml` no tiene.
+  Manda "📝 Para la cita piden «…»" con la captura (en una lista, también las opciones numeradas) y espera
+  `espera_dato_min` (4) tu respuesta: el valor, el número de la opción o «-» para dejarlo vacío. Lo guarda en
+  `data/cita/datos_extra.json` y no lo vuelve a preguntar. Por qué no basta con mandar el enlace: el sitio no
+  deja la misma persona con dos sesiones a la vez, así que entrar tú mientras el agente reserva no sirve.
+  Observaciones y el código SMS no se preguntan por esta vía.
 - **Tipos de error que ya respondiste.** Cada error se clasifica por paso y causa (p. ej. «vuelta_clave |
   bad gateway», «acceso_clave | no respondió a tiempo»). Lo que respondas con los botones vale para ese
   tipo: si dijiste "error normal", los siguientes de ese tipo quedan en el log y el historial sin avisar ni
@@ -221,6 +231,6 @@ ssh oracle 'last -n 10'                                                 # últim
   sitio, pero solo se verifican de verdad cuando aparece una cita real: si algo falla, el aviso dice
   "entra tú ya" y el HTML queda en `data/cita/paginas/` para corregir.
 - Para encontrar el límite, el agente tiene que chocar con él: hasta que el piso llega al ritmo que el sitio
-  acepta hay varios bloqueos (cada uno cuesta una pausa), y vuelve a probar cuando caduca el piso. Si eso
-  molesta, subir `ritmo.sube_bloqueo` (escalones más grandes), `ritmo.dias_piso` o `ritmo.minimo_s`.
+  acepta hay varios bloqueos (cada uno cuesta una pausa), y al bajar el piso vuelve a probar. Si eso
+  molesta, subir `ritmo.sube_bloqueo` (escalones más grandes), `ritmo.horas_baja_piso` o `ritmo.minimo_s`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).

@@ -64,12 +64,24 @@ NO_ENVIADOS = WORK / "no_enviados.json"  # avisos que Telegram no entregó: se r
 MAX_NO_ENVIADOS = 20
 HISTORIAL = WORK / "historial"     # capturas de cada revisión, por día (se borran tras `historial_dias`)
 AVISO_FOTO = WORK / "aviso.png"    # copia de la captura que se está enviando (la de VISTA cambia en cada paso)
+DATOS_EXTRA = WORK / "datos_extra.json"  # datos que el formulario pidió y respondiste por Telegram (campo → valor)
 LOG = DATA_DIR / "cita.log"
 
 NO_CITAS = "no hay citas disponibles"
 BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
            "intrusion prevention")
 SESION_CADUCADA = "sesión ha caducado"
+# Campos visibles y vacíos de un formulario (radios, casillas y botones aparte): un dato que la config no tiene
+CAMPOS_VACIOS_JS = """els => els.filter(e => e.offsetParent !== null && !e.disabled && !e.readOnly && (e.id || e.name)
+    && !['hidden', 'radio', 'checkbox', 'submit', 'button', 'image', 'reset', 'file'].includes(e.type)
+    && (e.tagName === 'SELECT' ? !e.value || /selecci|elija|^-+$/i.test(e.options[e.selectedIndex]?.text || '')
+                               : !e.value.trim()))
+  .map(e => ({sel: e.id ? '#' + CSS.escape(e.id) : `[name="${e.name}"]`, lista: e.tagName === 'SELECT',
+              etiqueta: ((e.labels && e.labels[0] && e.labels[0].innerText) || e.title || e.placeholder
+                         || e.name || e.id).replace(/\\s+/g, ' ').replace(/[:*]+$/, '').trim(),
+              opciones: e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim())
+                                                   .filter(t => t && !/selecci|elija|^-+$/i.test(t)) : []}))"""
+NO_PREGUNTAR = re.compile(r"observ|comentario|txtCodigoVerificacion", re.I)  # opcionales, o el SMS (va aparte)
 # Páginas de error del propio sitio: no dicen "no hay citas" y antes se confundían con que sí las había
 ERRORES_SITIO = ("bad gateway", "internal server error", "service unavailable", "gateway timeout",
                  "request rejected")
@@ -124,9 +136,15 @@ def avisar_con_foto(text: str) -> None:
 
 def esperar_codigo_telegram(minutos: int = 8) -> str | None:
     """Espera que respondas al bot con el código SMS (solo dígitos)."""
+    return esperar_respuesta_telegram(minutos, lambda t: re.fullmatch(r"\d{4,8}", t) is not None)
+
+
+def esperar_respuesta_telegram(minutos: int, vale) -> str | None:
+    """Espera tu próximo mensaje en el chat del bot que cumpla `vale(texto)` (los comandos /… se ignoran)."""
     token = env("TELEGRAM_BOT_TOKEN_CITA") or env("TELEGRAM_BOT_TOKEN")
     if not token:
         return None
+    tu_chat = str(env("TELEGRAM_CHAT_ID_CITA") or env("TELEGRAM_CHAT_ID") or "")
     api = f"https://api.telegram.org/bot{token}/getUpdates"
     try:  # descarta mensajes anteriores
         updates = requests.get(api, timeout=20).json().get("result", [])
@@ -142,10 +160,18 @@ def esperar_codigo_telegram(minutos: int = 8) -> str | None:
             continue
         for u in r.get("result", []):
             offset = u["update_id"] + 1
-            text = (u.get("message") or {}).get("text", "").strip()
-            if re.fullmatch(r"\d{4,8}", text):
+            msg = u.get("message") or {}
+            text = msg.get("text", "").strip()
+            if text and not text.startswith("/") and str(msg.get("chat", {}).get("id")) == tu_chat and vale(text):
                 return text
     return None
+
+
+def leer_datos_extra() -> dict:
+    try:
+        return json.loads(DATOS_EXTRA.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 class Flujo:
@@ -292,6 +318,7 @@ class Flujo:
         self.rellenar("#txtDesCitado", cfg.get("nombre"))
         if self.hay("select#txtPaisNac") and cfg.get("pais"):
             self.page.select_option("select#txtPaisNac", label=cfg["pais"].upper())
+        self.completar_faltantes()
         if self.hay("#btnEnviar"):
             self.pulsar("datos", "#btnEnviar")
             self.foto("validar")
@@ -305,6 +332,51 @@ class Flujo:
         if valor and campo.count() and campo.is_editable() and not campo.input_value():
             campo.fill(valor)
 
+    def completar_faltantes(self) -> None:
+        """Antes de enviar un formulario: si queda un campo vacío que la config no cubre (un dato nuevo que pide
+        el sitio), usa lo que respondiste la vez anterior o te lo pregunta por Telegram con la captura.
+        La respuesta se guarda en DATOS_EXTRA; "-" lo deja vacío y no lo vuelve a preguntar."""
+        try:
+            campos = self.page.eval_on_selector_all("input, select, textarea", CAMPOS_VACIOS_JS)
+        except PlaywrightError:
+            return
+        datos = leer_datos_extra()
+        for c in campos:
+            if NO_PREGUNTAR.search(c["sel"] + " " + c["etiqueta"]):
+                continue
+            if c["sel"] not in datos:
+                datos[c["sel"]] = {"etiqueta": c["etiqueta"], "valor": self.preguntar_dato(c)}
+                DATOS_EXTRA.write_text(json.dumps(datos, ensure_ascii=False, indent=1))
+            valor = datos[c["sel"]]["valor"]
+            if valor and c["lista"]:
+                self.page.select_option(c["sel"], label=valor)
+            elif valor:
+                self.page.fill(c["sel"], valor)
+
+    def preguntar_dato(self, campo: dict) -> str:
+        """Pregunta por Telegram el valor de un campo; en una lista, se responde con el número de la opción."""
+        minutos = int(self.cfg.get("espera_dato_min", 4))
+        opciones = campo["opciones"]
+        self.foto("falta_dato")
+        avisar_con_foto(f"📝 Para la cita piden «{campo['etiqueta']}» y no tengo ese dato. Respóndeme aquí con "
+                        + ("el número de la opción (te mando la lista)" if opciones else "el valor")
+                        + f"; «-» para dejarlo vacío. Tienes {minutos} min.")
+        if opciones:
+            avisar("\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1))[:4000])
+
+        def vale(t: str) -> bool:
+            return t == "-" or not opciones or (t.isdigit() and 1 <= int(t) <= len(opciones)) \
+                or t.upper() in (o.upper() for o in opciones)
+        respuesta = esperar_respuesta_telegram(minutos, vale)
+        if respuesta is None:
+            raise Inesperado(f"No me respondiste «{campo['etiqueta']}» a tiempo")
+        if respuesta == "-":
+            return ""
+        if opciones:
+            return opciones[int(respuesta) - 1] if respuesta.isdigit() \
+                else next(o for o in opciones if o.upper() == respuesta.upper())
+        return respuesta
+
     # --- 3. Reserva -------------------------------------------------------------------------
     def reservar(self) -> str:
         cfg, page = self.cfg, self.page
@@ -315,12 +387,14 @@ class Flujo:
             self.foto("solicitar")
         if self.hay("select#idSede"):                                          # oficina, si la pide
             page.select_option("select#idSede", index=0)
+            self.completar_faltantes()
             self.pulsar("oficina", "#btnSiguiente")
             self.foto("oficina")
         if self.hay("#txtTelefonoCitado"):                                     # contacto
             self.rellenar("#txtTelefonoCitado", cfg["telefono"])
             self.rellenar("#emailUNO", cfg["email"])
             self.rellenar("#emailDOS", cfg["email"])
+            self.completar_faltantes()
             self.pulsar("contacto", "#btnSiguiente")
             self.foto("contacto")
         if NO_CITAS in self.texto():
@@ -346,6 +420,7 @@ class Flujo:
             if not codigo:
                 raise Inesperado("No llegó el código SMS a tiempo")
             page.fill("#txtCodigoVerificacion", codigo)
+        self.completar_faltantes()
         self.confirmando = True  # desde aquí no se repite nada: podría duplicar la reserva
         self.pulsar("confirmar", "#btnConfirmar", reintentar=False)
         self.foto("confirmada")
