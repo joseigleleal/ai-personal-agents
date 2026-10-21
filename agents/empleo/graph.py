@@ -47,7 +47,7 @@ def build(prefs: dict, profile: dict, conn) -> StateGraph:
     # Backend propio del agente (ej. groq con respaldo ollama); si no se define, el general SCORER_BACKEND
     prefix = "EMPLEO_SCORER" if env("EMPLEO_SCORER_BACKEND") else "SCORER"
     scorer_model = llm_lc.chat_model(f"{prefix}_BACKEND", "ollama", f"{prefix}_FALLBACK", conn, json_mode=True, temperature=0,
-                                     groq_model=env("GROQ_SCORER_MODEL"))
+                                     groq_model=env("GROQ_SCORER_MODEL"), ollama_model=env("EMPLEO_OLLAMA_MODEL"))
     score_chain = scorer_model and llm_lc.json_chain(scorer.SCORER_SYSTEM, scorer_model)
     if score_chain:
         score_chain = score_chain.with_config(callbacks=[llm_lc.ClaudeCost(conn, "puntuar_empleo")])

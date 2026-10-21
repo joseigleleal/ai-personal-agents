@@ -1,0 +1,2 @@
+# Solo para experimentos/lora_mlx (Apple Silicon)
+mlx-lm>=0.32

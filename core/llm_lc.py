@@ -36,10 +36,11 @@ class ClaudeCost(BaseCallbackHandler):
                                usd, self.purpose)
 
 
-def _model(backend: str, json_mode: bool, temperature: float, groq_model: str | None) -> BaseChatModel:
+def _model(backend: str, json_mode: bool, temperature: float, groq_model: str | None,
+           ollama_model: str | None = None) -> BaseChatModel:
     if backend == "ollama":
         from langchain_ollama import ChatOllama
-        return ChatOllama(model=env("OLLAMA_MODEL", "qwen3:8b"), base_url=env("OLLAMA_URL", "http://localhost:11434"),
+        return ChatOllama(model=ollama_model or env("OLLAMA_MODEL", "qwen3:8b"), base_url=env("OLLAMA_URL", "http://localhost:11434"),
                           format="json" if json_mode else None, reasoning=False, temperature=temperature)
     if backend == "groq":
         from langchain_groq import ChatGroq
@@ -52,7 +53,8 @@ def _model(backend: str, json_mode: bool, temperature: float, groq_model: str | 
 
 
 def chat_model(main_var: str, main_default: str, fallback_var: str, conn, *, json_mode: bool = False,
-               temperature: float = 0.2, groq_model: str | None = None) -> Runnable | None:
+               temperature: float = 0.2, groq_model: str | None = None,
+               ollama_model: str | None = None) -> Runnable | None:
     """Modelo principal con su respaldo (ej. EMPLEO_SCORER_BACKEND=groq, EMPLEO_SCORER_FALLBACK=ollama).
 
     Solo entran los backends listos (Ollama encendido, clave de Groq o Claude). Claude sale de la cadena si
@@ -63,7 +65,7 @@ def chat_model(main_var: str, main_default: str, fallback_var: str, conn, *, jso
         chain.remove("claude")
     if not chain:
         return None
-    models = [_model(b, json_mode, temperature, groq_model) for b in chain]
+    models = [_model(b, json_mode, temperature, groq_model, ollama_model) for b in chain]
     return models[0].with_fallbacks(models[1:]) if len(models) > 1 else models[0]
 
 

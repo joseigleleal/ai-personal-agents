@@ -1,0 +1,26 @@
+# Entrenamiento LoRA con mlx-lm (Apple Silicon). Uso:
+#   .venv/bin/python -m mlx_lm lora -c experimentos/lora_mlx/lora.yaml
+# Pensado para una Mac de 16 GB: modelo de 1,5B sin cuantizar (bf16, ~3 GB), lote 1 y gradient checkpointing.
+
+model: "Qwen/Qwen2.5-1.5B-Instruct"   # alumno: se descarga de Hugging Face la primera vez (~3 GB)
+train: true
+data: "data/lora/datos"               # train/valid/test.jsonl de dataset.py --separar
+adapter_path: "data/lora/adaptador"   # solo los pesos del LoRA (unos MB)
+fine_tune_type: lora
+mask_prompt: true          # la pérdida se calcula solo sobre la respuesta, no sobre el prompt
+num_layers: -1             # LoRA en todas las capas
+lora_parameters:
+  rank: 16
+  scale: 20.0
+  dropout: 0.05
+batch_size: 1
+grad_accumulation_steps: 4 # lote efectivo de 4 sin pagar la memoria de 4
+iters: 600                 # ~1,7 pasadas sobre ~350 ejemplos
+learning_rate: 1.0e-4
+max_seq_length: 2560       # system (~600 tokens) + oferta (hasta ~1200) + respuesta
+grad_checkpoint: true
+steps_per_report: 20
+steps_per_eval: 100
+val_batches: -1
+save_every: 100
+seed: 7

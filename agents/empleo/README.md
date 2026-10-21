@@ -117,7 +117,7 @@ La clase `Offer` (fuente, id externo, título, url, descripción, salario, `appl
 - `pip install -r requirements.txt` (para este agente: `langgraph`, `langgraph-checkpoint-sqlite`,
   `langchain-core`, `langchain-ollama`, `langchain-groq`, `langchain-anthropic`, `requests`, `certifi`, `pyyaml`).
 - Modelo: Ollama local, Groq (plan gratis) o Claude; basta uno. Telegram es opcional.
-- `.env` por nombre: `EMPLEO_SCORER_BACKEND`, `EMPLEO_SCORER_FALLBACK` (o los generales
+- `.env` por nombre: `EMPLEO_SCORER_BACKEND`, `EMPLEO_SCORER_FALLBACK`, `EMPLEO_OLLAMA_MODEL` (o los generales
   `SCORER_BACKEND`, `SCORER_FALLBACK`), `WRITER_BACKEND`, `WRITER_FALLBACK`, `OLLAMA_URL`, `OLLAMA_MODEL`,
   `GROQ_API_KEY`, `GROQ_MODEL`, `GROQ_SCORER_MODEL`, `ANTHROPIC_API_KEY`, `MONTHLY_BUDGET_USD`,
   `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `INFOJOBS_CLIENT_ID`, `INFOJOBS_CLIENT_SECRET`, `IMAP_HOST`, `IMAP_USER`,
@@ -157,6 +157,8 @@ La clase `Offer` (fuente, id externo, título, url, descripción, salario, `appl
 - **Ofertas con pocos datos** (solo título y ciudad, típico de las alertas): tope de 8 y "revísalo en el anuncio".
 - **Modelo propio por agente:** `EMPLEO_SCORER_BACKEND=groq` con respaldo `ollama` (`with_fallbacks`),
   temperatura 0 para que el mismo anuncio dé el mismo resultado.
+  Con `EMPLEO_OLLAMA_MODEL` el respaldo local puede ser un modelo chico afinado para esta tarea
+  (ver [experimento LoRA con MLX](../../experimentos/lora_mlx/README.md)).
 
 ## Uso
 

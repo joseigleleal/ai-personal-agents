@@ -16,6 +16,12 @@ lectura y comparte la misma base.
 
 ¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md) · [Agentes con LangChain y LangGraph](docs/langgraph.md)
 
+## Experimentos
+
+| Experimento | Qué prueba | Ficha |
+|---|---|---|
+| `lora_mlx` | Afinar con LoRA (MLX, en una Mac) un modelo de 1,5B para que extraiga los datos de las ofertas como uno grande en la nube, cuantizarlo y servirlo con Ollama en la Mac o en un servidor sin GPU | En curso · [README](experimentos/lora_mlx/README.md) |
+
 ## Cómo funciona
 
 Cada agente es un programa de Python que **hace una corrida y termina**. El sistema operativo lo repite cada
@@ -137,6 +143,7 @@ core/            compartido: config.py · db.py · llm.py (modelos) · llm_lc.py
 agents/<nombre>/ un paquete por agente: README.md (su ficha), run.py y, si hace falta, sources.py / scorer.py
 config/          *.example.yaml públicos → copiarlos a *.yaml (privados) y completarlos
 docs/            guías: crear un agente y agentes con LangGraph
+experimentos/    pruebas fuera de los agentes (ej. lora_mlx: afinar un modelo chico), cada una con su README
 scripts/         launchd, estado, detener/reanudar, servidor Oracle, hook de pre-commit
 tests/           pruebas sin red ni claves (.venv/bin/python -m unittest discover tests)
 data/            base de datos, reportes, logs y certificados (nunca se sube)
