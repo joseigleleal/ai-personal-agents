@@ -1,5 +1,6 @@
 # Copiar como config/vigia.yaml (fuera de git) y ajustar. El vigía audita a los demás agentes y avisa solo si algo
 # anda mal (con sonido, una vez por problema); cuando se arregla, "resuelto" en silencio.
+nombre: principal           # con varias VMs, cada mensaje dice de cuál viene (por defecto: el hostname)
 parte_diario_hora: 9      # parte de todos los agentes, una vez al día y sin sonido (vacío = no)
 tablero: true             # un mensaje que se edita en cada vuelta (agentes, CPU, RAM, disco), sin sonido
 
@@ -35,7 +36,7 @@ sistema:
     - {patron: lora_mlx.evaluar, nombre: "evaluación LoRA"}
     - {patron: lora_mlx.dataset, nombre: "etiquetado LoRA"}
 
-# Picos: avisa qué los genera y ofrece botones para detener cosas. SOLO las acciones de esta lista: desde
+# Picos (solo en UNA VM por bot: los botones se leen con getUpdates y dos lectores se pisan): avisa qué los genera y ofrece botones para detener cosas. SOLO las acciones de esta lista: desde
 # Telegram nunca se ejecuta otra cosa. Tipos: descargar_ollama · detener_proceso (patron) · pausar_cita (minutos).
 picos:
   cpu_pct: 90                          # muestra de CPU de 2 s...

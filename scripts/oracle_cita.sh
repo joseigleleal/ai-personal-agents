@@ -64,6 +64,9 @@ ExecStart=/bin/bash -c 'export CITA_CERT_PASSWORD=\"\$(cat \"\$CREDENTIALS_DIREC
 StandardOutput=append:$R/data/cita.log
 StandardError=append:$R/data/cita.log
 TimeoutStartSec=1200
+# Prioridad: más CPU si compite con otro proceso (ej. un modelo) y lo último que se cierra si falta memoria
+CPUWeight=500
+OOMScoreAdjust=-500
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

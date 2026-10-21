@@ -88,6 +88,9 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
   tomara el bot, no podría correr comandos en el servidor. Además solo se atienden botones de tu chat.
 - **Detener la tanda, no el bucle:** `detener_proceso` ignora shells (`bash -c "... patrón ..."`), así un bucle que
   reintenta (como el etiquetado) sigue vivo y solo se corta el proceso que consume.
+- **Varias VMs, un bot:** cada VM tiene su vigía y su config (`nombre:` aparece en cada mensaje). Los botones de
+  picos van en **una sola** VM: se leen con `getUpdates` y dos lectores del mismo bot se quitan los botones
+  entre sí. Va en la VM de los modelos, que es donde hay picos.
 - **Un pico es sostenido:** la CPU de la muestra *y* la carga de 1 min tienen que estar altas; un instante no avisa.
   Un aviso por episodio: suena al empezar, se edita mientras dura y se cierra tras 2 vueltas normales.
 

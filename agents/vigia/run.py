@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ from core import notify
 from core.config import DATA_DIR, ROOT, load_config
 
 ESTADO = DATA_DIR / "vigia.json"
+MAQUINA = socket.gethostname()  # `nombre:` de la config: con varias VMs, cada mensaje dice de cuál viene
 
 
 def systemd(*args: str) -> str:
@@ -264,7 +266,7 @@ def ejecutar(clave: str, cfg: dict) -> str:
 
 
 def texto_pico(m: dict, inicio: str) -> str:
-    lineas = [f"🔥 Pico en el servidor desde las {inicio[11:16]} · {datetime.now():%H:%M}",
+    lineas = [f"🔥 Pico en {MAQUINA} desde las {inicio[11:16]} · {datetime.now():%H:%M}",
               f"CPU {m.get('cpu')} % · carga {m['carga1']:.2f} (1 min, {m['nucleos']} núcleos)"
               + (f" · RAM {m['ram_libre_pct']} % libre" if m.get("ram_libre_pct") is not None else "")]
     if m.get("top"):
@@ -321,7 +323,7 @@ def seguir_pico(m: dict, estado: dict, cfg: dict, ahora: datetime) -> str | None
         pico["normales"] = pico.get("normales", 0) + 1
         if pico["normales"] >= c.get("vueltas_para_cerrar", 2):  # dos vueltas normales seguidas: terminó
             notify.telegram_api("editMessageText", {"message_id": pico["msg"], "text":
-                                f"✅ Pico terminado (de {pico['desde'][11:16]} a {ahora:%H:%M})."}, "vigia")
+                                f"✅ Pico terminado en {MAQUINA} (de {pico['desde'][11:16]} a {ahora:%H:%M})."}, "vigia")
             del estado["pico"]
             return "pico terminado"
     return None
@@ -346,7 +348,7 @@ def auditar(cfg: dict, ahora: datetime | None = None) -> tuple[dict, dict, dict]
 
 
 def texto_parte(parte: dict, problemas: dict) -> str:
-    lineas = [f"🛰️ Parte del vigía · {datetime.now():%d/%m %H:%M}"]
+    lineas = [f"🛰️ Parte del vigía · {MAQUINA} · {datetime.now():%d/%m %H:%M}"]
     for nombre, items in parte.items():
         lineas.append(f"\n{nombre}:" + "".join(f"\n  · {i}" for i in items))
     lineas.append("\n" + ("⚠️ Abierto: " + "; ".join(problemas.values()) if problemas else "Todo en orden."))
@@ -358,11 +360,11 @@ def avisar_cambios(problemas: dict, estado: dict, ahora: datetime) -> list[str]:
     abiertos, avisos = estado.setdefault("abiertos", {}), []
     for clave, texto in problemas.items():
         if clave not in abiertos:
-            if notify.telegram(f"⚠️ Vigía · {clave.split(':')[0]}: {texto}", "vigia"):
+            if notify.telegram(f"⚠️ Vigía {MAQUINA} · {clave.split(':')[0]}: {texto}", "vigia"):
                 abiertos[clave] = ahora.isoformat(timespec="minutes")
                 avisos.append(clave)
     for clave in [c for c in abiertos if c not in problemas]:
-        if notify.telegram(f"✅ Vigía · {clave.split(':')[0]}: resuelto (desde {abiertos[clave][11:16]})",
+        if notify.telegram(f"✅ Vigía {MAQUINA} · {clave.split(':')[0]}: resuelto (desde {abiertos[clave][11:16]})",
                            "vigia", silent=True):
             del abiertos[clave]
             avisos.append(clave)
@@ -375,7 +377,9 @@ def main() -> None:
     parser.add_argument("--parte", action="store_true", help="Manda el parte ahora")
     args = parser.parse_args()
 
+    global MAQUINA
     cfg, ahora = load_config("vigia"), datetime.now()
+    MAQUINA = cfg.get("nombre") or MAQUINA
     problemas, parte, medidas = auditar(cfg, ahora)
     if args.ver:
         print(texto_parte(parte, problemas))

@@ -191,6 +191,7 @@ git config core.hooksPath scripts/hooks              # revisión de secretos ant
 ```bash
 # Desde la Mac: reintenta crear las VMs hasta que Oracle tenga capacidad (un pedido cada 3 min)
 nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 GB) y a1 (ARM)
+nohup caffeinate -i ./scripts/oracle_crear_vm.sh pesada >/dev/null 2>&1 &   # segunda A1 (2/12) para modelos
 
 # En el servidor. Con menos de 8 GB de RAM no instala Ollama y deja los modelos en Groq
 git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
@@ -199,8 +200,15 @@ cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa los 
 # Desde la Mac, cada agente a la VM con sus claves cifradas (systemd-creds) y su timer
 ./scripts/oracle_cita.sh ubuntu@<ip>      # cita (ver agents/cita/README.md)
 ./scripts/oracle_empleo.sh <host-ssh>     # empleo, con Ollama en la VM para el modelo de respaldo
-./scripts/oracle_vigia.sh <host-ssh>      # vigía: audita a los demás cada 30 min
+./scripts/oracle_vigia.sh <host-ssh> [config]   # vigía: audita a los demás cada 2 min (una config por VM)
 ```
+
+**Dos VMs en lo gratuito (4 núcleos ARM y 24 GB en total):** una liviana para lo que no puede fallar (`cita` y
+su vigía) y otra para lo pesado (Ollama, `empleo`, etiquetado y evaluación de modelos). Un modelo usando toda la CPU
+nunca le quita recursos a `cita`. Aun en una sola VM, `oracle_empleo.sh` limita Ollama a 1 núcleo y 6 GB y
+`oracle_cita.sh` le da prioridad a `cita` (`CPUWeight`, `OOMScoreAdjust`). Si una cuota de Oracle pone todo en cero
+para no pagar nada, permitir A1 tanto en `standard-a1-core-count` como en `standard-a1-core-regional-count` (y la
+memoria): crear una VM nueva revisa el contador regional.
 
 Los agentes de `setup_oracle.sh` hacen `git pull` en cada corrida. Los instalados con `oracle_*.sh` corren
 directo: para actualizarlos, `git pull` en la VM.

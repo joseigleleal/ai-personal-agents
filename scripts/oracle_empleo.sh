@@ -21,7 +21,11 @@ valor() { "$PROJECT/.venv/bin/python" -c "import sys;from dotenv import dotenv_v
 echo "==> 1. Repo, dependencias y Ollama"
 ssh_vm "set -e; cd $R && git pull -q && .venv/bin/pip install -q -r requirements.txt
 command -v ollama >/dev/null || curl -fsSL https://ollama.com/install.sh | sh >/dev/null 2>&1
-sudo systemctl enable --now ollama >/dev/null"
+sudo systemctl enable --now ollama >/dev/null
+# Los modelos nunca usan más de 1 núcleo ni 6 GB: en una VM compartida siempre queda lugar para los demás agentes
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+printf '[Service]\\nCPUQuota=100%%\\nMemoryMax=6G\\nCPUWeight=20\\nNice=15\\n' | sudo tee /etc/systemd/system/ollama.service.d/limites.conf >/dev/null
+sudo systemctl daemon-reload && sudo systemctl restart ollama"
 
 echo "==> 2. Claves cifradas con systemd-creds"
 ssh_vm "sudo mkdir -p /etc/credstore.encrypted && sudo chmod 700 /etc/credstore.encrypted"
@@ -71,6 +75,7 @@ StandardOutput=append:$R/data/empleo.log
 StandardError=append:$R/data/empleo.log
 TimeoutStartSec=3600
 Nice=10
+CPUWeight=20
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

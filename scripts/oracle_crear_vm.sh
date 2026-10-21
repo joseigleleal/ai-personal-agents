@@ -3,12 +3,14 @@
 # Un solo proceso alterna entre las VMs pendientes: Oracle limita los pedidos por usuario,
 # así que dos procesos en paralelo se bloquean entre sí ("Too many requests").
 # Corre en la Mac con la OCI CLI configurada (~/.oci/config).
-# Uso:  ./scripts/oracle_crear_vm.sh [micro] [a1]   (por defecto: micro a1)
+# Uso:  ./scripts/oracle_crear_vm.sh [micro] [a1] [pesada]   (por defecto: micro a1)
 #       nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   (en segundo plano)
 #   micro: VM.Standard.E2.1.Micro (AMD, 1 GB) "agents-micro", para agentes sin modelo local o con Groq.
 #   a1:    VM.Standard.A1.Flex (ARM, 4/24, 2/12 o 1/6) "personal-agents", para Ollama.
 #          1/6 sale antes (Oracle reparte la capacidad en trozos chicos); luego se puede agrandar a 4/24
 #          desde la consola (Editar → Shape), gratis mientras no pase de 4 OCPU / 24 GB.
+#   pesada: segunda A1 "agents-pesado" (2/12 o 1/6) con lo que queda gratis si la primera es 2/12: modelos y
+#          experimentos aparte, para que nunca le quiten CPU ni memoria a los agentes livianos.
 # Ritmo: un pedido cada PAUSE segundos rotando configuraciones y fault domains (Madrid tiene un solo AD
 # y 3 fault domains). Pedir en ráfagas provoca "Too many requests" y frena todo.
 set -uo pipefail
@@ -32,7 +34,8 @@ for target in "$@"; do
     micro) CANDIDATES+=("micro agents-micro VM.Standard.E2.1.Micro 1 1") ;;
     a1)    CANDIDATES+=("a1 personal-agents VM.Standard.A1.Flex 4 24" "a1 personal-agents VM.Standard.A1.Flex 2 12"
                          "a1 personal-agents VM.Standard.A1.Flex 1 6") ;;
-    *)     echo "Uso: $0 [micro] [a1]"; exit 1 ;;
+    pesada) CANDIDATES+=("a1 agents-pesado VM.Standard.A1.Flex 2 12" "a1 agents-pesado VM.Standard.A1.Flex 1 6") ;;
+    *)     echo "Uso: $0 [micro] [a1] [pesada]"; exit 1 ;;
   esac
 done
 

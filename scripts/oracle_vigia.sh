@@ -1,11 +1,12 @@
 #!/bin/zsh
 # Instala el vigía (audita a los demás agentes) en la VM de Oracle, con el bot de Telegram cifrado.
-# Uso:   ./scripts/oracle_vigia.sh <host-ssh>     (alias de ~/.ssh/config o ubuntu@<ip>)
+# Uso:   ./scripts/oracle_vigia.sh <host-ssh> [config]   (alias de ~/.ssh/config o ubuntu@<ip>; config por defecto:
+#        config/vigia.yaml). Con varias VMs, una config por VM; los botones de picos solo en una (comparten bot).
 # Antes: la VM tiene el repo en ~/ai-personal-agents (scripts/oracle_cita.sh). Usa el bot TELEGRAM_BOT_TOKEN_VIGIA
 # o, si no existe, el general (TELEGRAM_BOT_TOKEN), y config/vigia.yaml (o el .example si no lo creaste).
 set -euo pipefail
 
-VM="${1:?Uso: $0 <host-ssh>}"
+VM="${1:?Uso: $0 <host-ssh> [config]}"
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 R=/home/ubuntu/ai-personal-agents
 ssh_vm() { ssh "$VM" "$@"; }
@@ -19,7 +20,8 @@ for pair in "vigia_bot:$bot" "vigia_chat:$chat"; do
   printf '%s' "${pair#*:}" | ssh_vm "sudo systemd-creds encrypt --name=${pair%%:*} - /etc/credstore.encrypted/${pair%%:*}.cred 2>/dev/null"
 done
 ssh_vm 'sudo sh -c "chmod 600 /etc/credstore.encrypted/vigia_*.cred"'
-[ -f "$PROJECT/config/vigia.yaml" ] && scp -q "$PROJECT/config/vigia.yaml" "$VM:$R/config/" && ssh_vm "chmod 600 $R/config/vigia.yaml"
+CFG="${2:-$PROJECT/config/vigia.yaml}"
+[ -f "$CFG" ] && scp -q "$CFG" "$VM:$R/config/vigia.yaml" && ssh_vm "chmod 600 $R/config/vigia.yaml"
 
 echo "==> 2. Servicio y timer (cada 2 min)"
 ssh_vm "set -e
