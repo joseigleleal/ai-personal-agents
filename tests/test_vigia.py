@@ -70,11 +70,65 @@ class Vigia(unittest.TestCase):
         self.assertTrue(tg.call_args_list[1].kwargs["silent"])              # el "resuelto", no
         self.assertEqual(estado["abiertos"], {})
 
-    def test_disco_lleno(self):
-        uso = mock.Mock(total=100, used=90)
-        with mock.patch.object(run.shutil, "disk_usage", return_value=uso):
-            problemas, _ = run.revisar_sistema({"disco_max_pct": 85})
-        self.assertIn("sistema:disco", problemas)
+    def test_disco_lleno_y_cpu_saturada(self):
+        uso = mock.Mock(total=100 * 1024 ** 3, used=90 * 1024 ** 3)
+        with mock.patch.object(run.shutil, "disk_usage", return_value=uso), \
+                mock.patch.object(run, "uso_cpu", return_value=97), \
+                mock.patch.object(run, "procesos_top", return_value=[("ollama", 180.0, 1.3)]), \
+                mock.patch.object(run.os, "cpu_count", return_value=2), \
+                mock.patch.object(run.os, "getloadavg", return_value=(4.0, 3.8, 3.5)):
+            problemas, lineas, medidas = run.revisar_sistema({"disco_max_pct": 85})
+        self.assertEqual({"sistema:disco", "sistema:cpu"}, {k for k in problemas if k != "sistema:ram"})
+        self.assertIn("CPU 97 %", lineas[0])
+        self.assertIn("disco 90 de 100 GB (90 %)", lineas)
+        self.assertIn("más CPU: ollama", lineas[-1])
+        with mock.patch.object(run.os, "getloadavg", return_value=(4.0, 1.0, 0.5)), \
+                mock.patch.object(run, "uso_cpu", return_value=99):
+            self.assertNotIn("sistema:cpu", run.revisar_sistema({})[0])  # un pico de 1 min no es problema
+
+    def test_pico_avisa_una_vez_edita_y_cierra(self):
+        cfg = {"picos": {"acciones": {"cita": {"texto": "Pausar cita", "tipo": "pausar_cita", "minutos": 30}}}}
+        pico = {"cpu": 98, "carga1": 2.4, "nucleos": 2, "ram_libre_pct": 50, "top": [("Ollama", 180.0, 4.8)]}
+        normal = {**pico, "cpu": 20, "carga1": 0.3}
+        estado = {}
+        with mock.patch.object(run.notify, "telegram_api", return_value={"message_id": 9}) as api:
+            self.assertEqual(run.seguir_pico(pico, estado, cfg, AHORA), "pico nuevo")
+            self.assertIsNone(run.seguir_pico(pico, estado, cfg, AHORA))       # sigue: solo edita
+            self.assertIsNone(run.seguir_pico(normal, estado, cfg, AHORA))     # 1 vuelta normal: espera otra
+            self.assertEqual(run.seguir_pico(normal, estado, cfg, AHORA), "pico terminado")
+        metodos = [c.args[0] for c in api.call_args_list]
+        self.assertEqual(metodos, ["sendMessage", "editMessageText", "editMessageText"])
+        primer = api.call_args_list[0].args[1]
+        self.assertIn("Ollama: 180 % CPU", primer["text"])
+        self.assertEqual(primer["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "vig:cita")
+        self.assertNotIn("pico", estado)
+
+    def test_un_instante_de_cpu_no_es_pico(self):
+        self.assertFalse(run.es_pico({"cpu": 99, "carga1": 0.4, "nucleos": 2, "ram_libre_pct": 60}, {}))
+        self.assertTrue(run.es_pico({"cpu": 30, "carga1": 0.4, "nucleos": 2, "ram_libre_pct": 8}, {}))
+
+    def test_botones_solo_ejecutan_la_lista_permitida(self):
+        cfg = {"picos": {"acciones": {"cita": {"texto": "Pausar", "tipo": "pausar_cita", "minutos": 30}}}}
+        updates = [
+            {"update_id": 5, "callback_query": {"id": "a", "data": "vig:cita",
+                                                 "message": {"chat": {"id": 42}, "message_id": 9, "text": "🔥"}}},
+            {"update_id": 6, "callback_query": {"id": "b", "data": "vig:rm -rf /",
+                                                 "message": {"chat": {"id": 42}, "message_id": 9, "text": "🔥"}}},
+            {"update_id": 7, "callback_query": {"id": "c", "data": "vig:cita",
+                                                 "message": {"chat": {"id": 666}, "message_id": 1, "text": "x"}}},
+        ]
+        estado = {}
+
+        def api(metodo, datos=None, agent=None):
+            return updates if metodo == "getUpdates" else {}
+        with mock.patch.object(run.notify, "telegram_api", side_effect=api), \
+                mock.patch.object(run.notify, "chat_propio", return_value="42"):
+            hechas = run.atender_botones(estado, cfg)
+        self.assertEqual(len(hechas), 2)                    # el de otro chat se ignora
+        self.assertIn("Cita en pausa", hechas[0])
+        self.assertIn("no está en la lista permitida", hechas[1])
+        self.assertTrue((self.tmp / "data/cita/pausa_hasta").exists())
+        self.assertEqual(estado["tg_offset"], 8)
 
 
 if __name__ == "__main__":

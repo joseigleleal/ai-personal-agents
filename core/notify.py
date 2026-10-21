@@ -54,6 +54,30 @@ def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
     )
 
 
+def telegram_api(metodo: str, datos: dict | None = None, agent: str | None = None) -> dict | None:
+    """Llamada directa a la API del bot (getUpdates, editMessageText, answerCallbackQuery…), con el chat del agente
+    ya puesto. Devuelve el `result` de Telegram, o None si falla."""
+    suffix = f"_{agent.upper()}" if agent else ""
+    token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
+    chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return None
+    datos = dict(datos or {})
+    if metodo not in ("getUpdates", "answerCallbackQuery"):
+        datos.setdefault("chat_id", chat_id)
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/{metodo}", json=datos, timeout=30)
+        return r.json().get("result") if r.ok else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def chat_propio(agent: str | None = None) -> str:
+    """El chat de la persona para ese agente: solo se atienden mensajes y botones de ahí."""
+    suffix = f"_{agent.upper()}" if agent else ""
+    return str(env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID") or "")
+
+
 def telegram_estado(text: str, agent: str | None = None, message_id: int | None = None) -> int | None:
     """Mensaje de estado que se actualiza en el lugar: edita `message_id` y, si no se puede (no existe o lo
     borraste), manda uno nuevo en silencio. Devuelve el id del mensaje (guárdalo para la próxima) o None."""

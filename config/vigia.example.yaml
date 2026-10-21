@@ -1,6 +1,7 @@
 # Copiar como config/vigia.yaml (fuera de git) y ajustar. El vigía audita a los demás agentes y avisa solo si algo
 # anda mal (con sonido, una vez por problema); cuando se arregla, "resuelto" en silencio.
 parte_diario_hora: 9      # parte de todos los agentes, una vez al día y sin sonido (vacío = no)
+tablero: true             # un mensaje que se edita en cada vuelta (agentes, CPU, RAM, disco), sin sonido
 
 agentes:
   cita:
@@ -20,5 +21,29 @@ agentes:
 
 sistema:
   disco_max_pct: 85
+  carga_max_por_nucleo: 1.5          # carga media de 15 min por núcleo; un pico corto no cuenta
+  procesos_top: 3                    # procesos que más CPU usan, en el tablero
   ram_min_libre_pct: 10
   servicios: [ollama]                  # servicios de systemd que deben estar activos
+  nombres:                             # cómo se muestran los procesos (por patrón del comando)
+    - {patron: llama-server, nombre: "Ollama (modelo de lenguaje)"}
+    - {patron: ollama, nombre: Ollama}
+    - {patron: agents.cita, nombre: "agente cita"}
+    - {patron: chrome, nombre: "navegador de cita"}
+    - {patron: headless_shell, nombre: "navegador de cita"}
+    - {patron: agents.empleo, nombre: "agente empleo"}
+    - {patron: lora_mlx.evaluar, nombre: "evaluación LoRA"}
+    - {patron: lora_mlx.dataset, nombre: "etiquetado LoRA"}
+
+# Picos: avisa qué los genera y ofrece botones para detener cosas. SOLO las acciones de esta lista: desde
+# Telegram nunca se ejecuta otra cosa. Tipos: descargar_ollama · detener_proceso (patron) · pausar_cita (minutos).
+picos:
+  cpu_pct: 90                          # muestra de CPU de 2 s...
+  carga_1min_por_nucleo: 1.0           # ...y carga de 1 min alta (no un instante)
+  ram_libre_pct: 15                    # o poca RAM libre
+  vueltas_para_cerrar: 2               # vueltas normales seguidas para dar el pico por terminado
+  acciones:
+    ollama: {texto: "🧠 Descargar modelos de Ollama", tipo: descargar_ollama}
+    evaluacion: {texto: "⏹️ Detener la evaluación LoRA", tipo: detener_proceso, patron: "experimentos.lora_mlx.evaluar"}
+    etiquetado: {texto: "⏹️ Detener esta tanda de etiquetado", tipo: detener_proceso, patron: "experimentos.lora_mlx.dataset"}
+    cita: {texto: "⏸️ Pausar cita 1 h", tipo: pausar_cita, minutos: 60}

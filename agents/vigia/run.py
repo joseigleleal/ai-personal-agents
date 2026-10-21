@@ -3,11 +3,14 @@
 Lee lo que cada agente ya deja en disco (memoria, log, archivos de pausa) y el estado de systemd y del servidor.
 No toca a los agentes ni usa modelo de lenguaje: son reglas concretas en config/vigia.yaml.
 - Un problema nuevo se avisa una vez, con sonido; cuando se arregla, llega "resuelto" en silencio.
+- En cada vuelta edita un mismo mensaje (el tablero): agentes, CPU, carga, RAM, disco y procesos que más consumen.
+- Si hay un pico (CPU o RAM), avisa qué lo genera con botones para detener cosas de una lista cerrada
+  (`picos.acciones`); los botones se atienden en la vuelta siguiente (el timer corre cada 2 min).
 - Una vez al día (`parte_diario_hora`) manda en silencio el parte de todos los agentes.
 El estado (qué problemas están abiertos y desde cuándo) queda en data/vigia.json.
 
 Uso:
-    python -m agents.vigia.run            # revisa y avisa si hay algo nuevo (el timer lo lanza cada 30 min)
+    python -m agents.vigia.run            # revisa y avisa si hay algo nuevo (el timer lo lanza cada 2 min)
     python -m agents.vigia.run --ver      # muestra el parte sin avisar
     python -m agents.vigia.run --parte    # manda el parte ahora
 """
@@ -16,8 +19,11 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import requests
 
 from core import notify
 from core.config import DATA_DIR, ROOT, load_config
@@ -117,30 +123,213 @@ def revisar_log(nombre: str, c: dict, ahora: datetime) -> tuple[dict, list[str]]
     return problemas, [f"última corrida hace {edad:.0f} min"]
 
 
-def revisar_sistema(c: dict) -> tuple[dict, list[str]]:
-    problemas = {}
-    uso = shutil.disk_usage(ROOT)
-    pct_disco = 100 * uso.used // uso.total
-    if pct_disco > c.get("disco_max_pct", 85):
-        problemas["sistema:disco"] = f"disco al {pct_disco} %"
-    lineas = [f"disco {pct_disco} %"]
+def uso_cpu(segundos: float = 2) -> int | None:
+    """% de CPU usado en los próximos `segundos` (de /proc/stat; None fuera de Linux)."""
+    def leer():
+        campos = [int(x) for x in Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]]
+        return sum(campos), campos[3] + campos[4]  # total, ocioso (idle + iowait)
+    if not Path("/proc/stat").exists():
+        return None
+    t1, o1 = leer()
+    time.sleep(segundos)
+    t2, o2 = leer()
+    return round(100 * (1 - (o2 - o1) / max(t2 - t1, 1)))
+
+
+def procesos_top(n: int = 3, nombres: list | None = None) -> list[tuple[str, float, float]]:
+    """Los `n` procesos que más CPU usan ahora: (nombre, % CPU, GB). `nombres` traduce por patrón del comando
+    ([{patron, nombre}]): así "python -m agents.cita.run" se ve como "agente cita" y no como "python"."""
+    try:
+        r = subprocess.run(["ps", "-eo", "pcpu,rss,args", "--sort=-pcpu", "--no-headers"],
+                           capture_output=True, text=True, timeout=10)
+    except OSError:
+        return []
+    filas = []
+    for linea in r.stdout.splitlines()[:n]:
+        partes = linea.split(None, 2)
+        if len(partes) < 3:
+            continue
+        cpu, rss, args = float(partes[0]), int(partes[1]), partes[2]
+        nombre = next((x["nombre"] for x in nombres or [] if x["patron"] in args),
+                      Path(args.split()[0]).name)
+        filas.append((nombre, cpu, rss / 1024 ** 2))
+    return filas
+
+
+def revisar_sistema(c: dict) -> tuple[dict, list[str], dict]:
+    """CPU, carga, RAM, disco y servicios necesarios. Un pico de CPU no es problema: solo la carga de 15 min.
+    Devuelve también las medidas crudas, para detectar picos."""
+    problemas, lineas = {}, []
+    nucleos = os.cpu_count() or 1
+    cpu, (c1, c5, c15) = uso_cpu(c.get("muestra_cpu_s", 2)), os.getloadavg()
+    medidas = {"cpu": cpu, "carga1": c1, "nucleos": nucleos, "ram_libre_pct": None, "top": []}
+    lineas.append((f"CPU {cpu} %" if cpu is not None else "CPU ?") + f" · carga {c1:.2f} / {c5:.2f} / {c15:.2f}"
+                  f" (1 / 5 / 15 min, {nucleos} núcleos)")
+    if c15 / nucleos > c.get("carga_max_por_nucleo", 1.5):
+        problemas["sistema:cpu"] = f"CPU saturada: carga media de 15 min {c15:.2f} con {nucleos} núcleos"
     if Path("/proc/meminfo").exists():
         mem = {l.split(":")[0]: int(l.split()[1]) for l in Path("/proc/meminfo").read_text().splitlines()}
-        libre = 100 * mem["MemAvailable"] // mem["MemTotal"]
-        if libre < c.get("ram_min_libre_pct", 10):
-            problemas["sistema:ram"] = f"solo {libre} % de RAM libre"
-        lineas.append(f"RAM libre {libre} %")
-    carga = os.getloadavg()[0] / (os.cpu_count() or 1)
-    lineas.append(f"carga {carga:.2f} por núcleo")
+        total, libre = mem["MemTotal"] / 1024 ** 2, mem["MemAvailable"] / 1024 ** 2
+        pct_libre = medidas["ram_libre_pct"] = round(100 * libre / total)
+        lineas.append(f"RAM {total - libre:.1f} de {total:.1f} GB ({pct_libre} % libre)")
+        if pct_libre < c.get("ram_min_libre_pct", 10):
+            problemas["sistema:ram"] = f"solo {pct_libre} % de RAM libre"
+    uso = shutil.disk_usage(ROOT)
+    pct_disco = round(100 * uso.used / uso.total)
+    lineas.append(f"disco {uso.used / 1024 ** 3:.0f} de {uso.total / 1024 ** 3:.0f} GB ({pct_disco} %)")
+    if pct_disco > c.get("disco_max_pct", 85):
+        problemas["sistema:disco"] = f"disco al {pct_disco} %"
+    if cpu is not None:
+        medidas["top"] = procesos_top(c.get("procesos_top", 3), c.get("nombres"))
+    if medidas["top"]:
+        lineas.append("más CPU: " + " · ".join(f"{n} {cpu_p:.0f} % CPU, {gb:.1f} GB"
+                                               for n, cpu_p, gb in medidas["top"]))
     for s in c.get("servicios", []):
         estado = systemd("is-active", s)
         if estado and estado != "active":
             problemas[f"sistema:{s}"] = f"el servicio {s} está «{estado}»"
-    return problemas, lineas
+    return problemas, lineas, medidas
 
 
-def auditar(cfg: dict, ahora: datetime | None = None) -> tuple[dict, dict]:
-    """Corre todos los chequeos. Devuelve (problemas {clave: texto}, parte {sección: [líneas]})."""
+# --- Picos: avisar qué los genera y ofrecer acciones de una lista cerrada ----------------------------------
+def es_pico(m: dict, c: dict) -> bool:
+    """CPU alta en la muestra y carga de 1 min alta (no un instante), o poca RAM libre."""
+    cpu = (m.get("cpu") is not None and m["cpu"] >= c.get("cpu_pct", 90)
+           and m["carga1"] / m["nucleos"] >= c.get("carga_1min_por_nucleo", 1.0))
+    ram = m.get("ram_libre_pct") is not None and m["ram_libre_pct"] < c.get("ram_libre_pct", 15)
+    return cpu or ram
+
+
+def ollama_cargados(url: str) -> list[str]:
+    try:
+        return [x["name"] for x in requests.get(f"{url}/api/ps", timeout=5).json().get("models", [])]
+    except (requests.RequestException, ValueError):
+        return []
+
+
+def pids(patron: str) -> list[int]:
+    """Procesos cuyo comando contiene `patron`, sin contar shells (un bucle `bash -c "... patron ..."` no es el
+    proceso a detener: matarlo cortaría todo el bucle y no solo la tanda en curso)."""
+    r = subprocess.run(["pgrep", "-f", patron], capture_output=True, text=True)
+    salida = []
+    for pid in map(int, r.stdout.split()):
+        try:
+            nombre = Path(f"/proc/{pid}/comm").read_text().strip() if Path("/proc").exists() else ""
+        except OSError:
+            continue
+        if pid != os.getpid() and nombre not in ("bash", "sh", "zsh", "dash"):
+            salida.append(pid)
+    return salida
+
+
+def aplica(a: dict, cfg: dict) -> bool:
+    """¿Tiene sentido ofrecer esta acción ahora? (hay algo que detener)"""
+    if a["tipo"] == "descargar_ollama":
+        return bool(ollama_cargados(a.get("url", "http://127.0.0.1:11434")))
+    if a["tipo"] == "detener_proceso":
+        return bool(pids(a["patron"]))
+    if a["tipo"] == "pausar_cita":
+        pausa = ruta(a.get("pausa", "data/cita/pausa_hasta"))
+        try:
+            return not (pausa.exists() and datetime.fromisoformat(pausa.read_text().strip()) > datetime.now())
+        except ValueError:
+            return True
+    return False
+
+
+def ejecutar(clave: str, cfg: dict) -> str:
+    """Hace una acción de `picos.acciones` (lista cerrada en la config). Nunca ejecuta texto llegado de Telegram."""
+    a = ((cfg.get("picos") or {}).get("acciones") or {}).get(clave)
+    if not a:
+        return "Esa acción no está en la lista permitida."
+    if a["tipo"] == "descargar_ollama":
+        url = a.get("url", "http://127.0.0.1:11434")
+        modelos = ollama_cargados(url)
+        for m in modelos:
+            requests.post(f"{url}/api/generate", json={"model": m, "keep_alive": 0}, timeout=30)
+        return f"Descargué de memoria: {', '.join(modelos)}." if modelos else "No había modelos cargados."
+    if a["tipo"] == "detener_proceso":
+        encontrados = pids(a["patron"])
+        for pid in encontrados:
+            try:
+                os.kill(pid, 15)  # SIGTERM: que termine ordenado
+            except OSError:
+                pass
+        return "Detenido." if encontrados else "Ya no estaba corriendo."
+    if a["tipo"] == "pausar_cita":
+        hasta = datetime.now() + timedelta(minutes=a.get("minutos", 60))
+        ruta(a.get("pausa", "data/cita/pausa_hasta")).write_text(hasta.isoformat(timespec="minutes"))
+        return f"Cita en pausa hasta las {hasta:%H:%M}."
+    return "Tipo de acción desconocido."
+
+
+def texto_pico(m: dict, inicio: str) -> str:
+    lineas = [f"🔥 Pico en el servidor desde las {inicio[11:16]} · {datetime.now():%H:%M}",
+              f"CPU {m.get('cpu')} % · carga {m['carga1']:.2f} (1 min, {m['nucleos']} núcleos)"
+              + (f" · RAM {m['ram_libre_pct']} % libre" if m.get("ram_libre_pct") is not None else "")]
+    if m.get("top"):
+        lineas.append("Lo que más consume:")
+        lineas += [f"· {n}: {cpu:.0f} % CPU, {gb:.1f} GB" for n, cpu, gb in m["top"]]
+    lineas.append("¿Detengo algo? Toca un botón (solo opciones de la lista permitida).")
+    return "\n".join(lineas)
+
+
+def botones_pico(cfg: dict) -> dict:
+    acciones = (cfg.get("picos") or {}).get("acciones") or {}
+    filas = [[{"text": a["texto"], "callback_data": f"vig:{k}"}] for k, a in acciones.items() if aplica(a, cfg)]
+    return {"inline_keyboard": filas}
+
+
+def atender_botones(estado: dict, cfg: dict) -> list[str]:
+    """Lee los botones pulsados desde la última vuelta (solo de tu chat) y ejecuta esas acciones."""
+    updates = notify.telegram_api("getUpdates", {"offset": estado.get("tg_offset"), "timeout": 0,
+                                                 "allowed_updates": ["callback_query"]}, "vigia") or []
+    hechas, tu_chat = [], notify.chat_propio("vigia")
+    for u in updates:
+        estado["tg_offset"] = u["update_id"] + 1
+        q = u.get("callback_query") or {}
+        msg = q.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != tu_chat or not q.get("data", "").startswith("vig:"):
+            continue
+        clave = q["data"][4:]
+        resultado = ejecutar(clave, cfg)
+        hechas.append(f"{clave}: {resultado}")
+        notify.telegram_api("answerCallbackQuery", {"callback_query_id": q["id"], "text": resultado[:180]}, "vigia")
+        notify.telegram_api("editMessageText", {"message_id": msg.get("message_id"),
+                                                "text": (msg.get("text") or "") + f"\n→ {resultado}",
+                                                "reply_markup": botones_pico(cfg)}, "vigia")
+    return hechas
+
+
+def seguir_pico(m: dict, estado: dict, cfg: dict, ahora: datetime) -> str | None:
+    """Abre, actualiza o cierra el aviso de pico. Uno por episodio: suena al empezar, después solo se edita."""
+    c, pico = cfg.get("picos") or {}, estado.get("pico")
+    if es_pico(m, c):
+        if not pico:
+            inicio = ahora.isoformat(timespec="minutes")
+            r = notify.telegram_api("sendMessage", {"text": texto_pico(m, inicio),
+                                                    "reply_markup": botones_pico(cfg)}, "vigia")
+            if r:
+                estado["pico"] = {"msg": r["message_id"], "desde": inicio, "normales": 0}
+                return "pico nuevo"
+        else:
+            pico["normales"] = 0
+            notify.telegram_api("editMessageText", {"message_id": pico["msg"], "text": texto_pico(m, pico["desde"]),
+                                                    "reply_markup": botones_pico(cfg)}, "vigia")
+        return None
+    if pico:
+        pico["normales"] = pico.get("normales", 0) + 1
+        if pico["normales"] >= c.get("vueltas_para_cerrar", 2):  # dos vueltas normales seguidas: terminó
+            notify.telegram_api("editMessageText", {"message_id": pico["msg"], "text":
+                                f"✅ Pico terminado (de {pico['desde'][11:16]} a {ahora:%H:%M})."}, "vigia")
+            del estado["pico"]
+            return "pico terminado"
+    return None
+
+
+def auditar(cfg: dict, ahora: datetime | None = None) -> tuple[dict, dict, dict]:
+    """Corre todos los chequeos. Devuelve (problemas {clave: texto}, parte {sección: [líneas]},
+    medidas del servidor)."""
     ahora = ahora or datetime.now()
     problemas, parte = {}, {}
     for nombre, c in (cfg.get("agentes") or {}).items():
@@ -150,10 +339,10 @@ def auditar(cfg: dict, ahora: datetime | None = None) -> tuple[dict, dict]:
             p, lineas = {**p, **p2}, lineas + l2
         problemas.update(p)
         parte[nombre] = lineas
-    p, lineas = revisar_sistema(cfg.get("sistema") or {})
+    p, lineas, medidas = revisar_sistema(cfg.get("sistema") or {})
     problemas.update(p)
     parte["servidor"] = lineas
-    return problemas, parte
+    return problemas, parte, medidas
 
 
 def texto_parte(parte: dict, problemas: dict) -> str:
@@ -187,12 +376,22 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg, ahora = load_config("vigia"), datetime.now()
-    problemas, parte = auditar(cfg, ahora)
+    problemas, parte, medidas = auditar(cfg, ahora)
     if args.ver:
         print(texto_parte(parte, problemas))
         return
     estado = leer_json(ESTADO)
     avisos = avisar_cambios(problemas, estado, ahora)
+    if cfg.get("picos"):
+        avisos += atender_botones(estado, cfg)
+        cambio = seguir_pico(medidas, estado, cfg, ahora)
+        if cambio:
+            avisos.append(cambio)
+    if cfg.get("tablero", True):  # un mensaje que se edita en cada vuelta, sin sonido
+        mid = notify.telegram_estado(texto_parte(parte, problemas).replace("Parte del vigía", "Tablero del vigía"),
+                                     "vigia", estado.get("tablero_msg"))
+        if mid:
+            estado["tablero_msg"] = mid
     hoy, hora = f"{ahora:%Y-%m-%d}", cfg.get("parte_diario_hora", 9)
     if args.parte or (hora is not None and ahora.hour >= int(hora) and estado.get("parte_dia") != hoy):
         if notify.telegram(texto_parte(parte, problemas), "vigia", silent=True) and not args.parte:

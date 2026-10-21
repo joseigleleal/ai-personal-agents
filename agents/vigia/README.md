@@ -7,9 +7,9 @@ una vez por problema, y manda un parte diario en silencio.
 | | |
 |---|---|
 | Tipo | Reglas sobre archivos de estado, logs y systemd, sin modelo de lenguaje |
-| Frecuencia | Cada 30 min (timer de systemd en el servidor) |
+| Frecuencia | Cada 2 min (timer de systemd en el servidor), para atender rápido los botones de los picos |
 | Entradas | `config/vigia.yaml` · memoria y logs de cada agente en `data/` · `systemctl` · disco y RAM |
-| Salidas | Telegram (problema nuevo con sonido, "resuelto" y parte diario en silencio) · `data/vigia.json` · `data/vigia.log` |
+| Salidas | Telegram (problema nuevo con sonido; tablero que se edita en cada vuelta, "resuelto" y parte diario en silencio) · `data/vigia.json` · `data/vigia.log` |
 
 ## Flujo
 
@@ -17,7 +17,11 @@ una vez por problema, y manda un parte diario en silencio.
 cada 30 min ──▶ por agente: ¿timer encendido? (apagado = detenido a propósito, no es problema)
                   ├─ cita: ¿revisó a la hora prevista? ¿% de errores en la hora? ¿pausa demasiado larga?
                   └─ por corridas (empleo): ¿el log creció hace poco? ¿líneas de error en la última corrida?
-             ──▶ servidor: disco, RAM libre, servicios necesarios (ej. ollama)
+             ──▶ servidor: % de CPU (muestra de 2 s), carga 1/5/15 min, RAM y disco en GB, procesos que más consumen,
+                 servicios necesarios (ej. ollama)
+             ──▶ tablero: edita el mismo mensaje de Telegram con todo lo anterior (sin sonido)
+             ──▶ ¿pico? (CPU ≥ 90 % y carga de 1 min alta, o poca RAM) → 🔥 qué lo genera + botones de la lista
+                 cerrada (descargar Ollama, detener un proceso, pausar cita); el botón se ejecuta en la vuelta siguiente
              ──▶ problemas nuevos → ⚠️ con sonido · los que desaparecieron → ✅ en silencio
              ──▶ una vez al día (parte_diario_hora): 🛰️ parte de todos, en silencio
 ```
@@ -26,7 +30,7 @@ cada 30 min ──▶ por agente: ¿timer encendido? (apagado = detenido a prop�
 
 ### En palabras simples
 
-Es un guardia que da una vuelta cada media hora. No sabe hacer el trabajo de los otros agentes ni los toca: solo
+Es un guardia que da una vuelta cada dos minutos. No sabe hacer el trabajo de los otros agentes ni los toca: solo
 mira las huellas que dejan (a qué hora dijeron que volverían a revisar, cuántas veces fallaron, si su servicio se
 cayó) y el estado del servidor. Si algo no cuadra, avisa una sola vez; cuando se arregla, avisa sin hacer ruido.
 Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que algo se detuvo.
@@ -51,11 +55,14 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
    hora y el ciclo real (mediana entre inicios); una pausa mayor a `pausa_max_min` también es problema.
 3. `revisar_log` (agentes por corridas): antigüedad del log frente a `log_max_min` y cuántas de las últimas 40 líneas
    contienen alguna de `frases_error`.
-4. `revisar_sistema`: `shutil.disk_usage`, `MemAvailable` de `/proc/meminfo`, carga por núcleo y
-   `systemctl is-active` de cada servicio de `sistema.servicios`.
+4. `revisar_sistema`: `uso_cpu` (dos lecturas de `/proc/stat` separadas 2 s), `os.getloadavg` (1/5/15 min),
+   `MemAvailable` de `/proc/meminfo`, `shutil.disk_usage`, `procesos_top` (`ps --sort=-pcpu`) y
+   `systemctl is-active` de cada servicio. Solo la carga de 15 min por núcleo (`carga_max_por_nucleo`, 1,5) cuenta
+   como problema: un pico mientras un modelo responde es normal.
 5. `avisar_cambios` compara con `data/vigia.json` (`abiertos`: clave → desde cuándo): lo nuevo se avisa con sonido;
    lo que ya no aparece se avisa "resuelto" en silencio. Solo se guarda si Telegram lo entregó.
-6. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio (`parte_dia` en el estado).
+6. Con `tablero: true`, edita el mismo mensaje con el parte completo (`notify.telegram_estado`, id en `tablero_msg`).
+7. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio (`parte_dia` en el estado).
 
 **Para replicarlo**
 
@@ -76,6 +83,14 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
 
 ## Decisiones de diseño (y por qué)
 
+- **Botones de una lista cerrada:** desde Telegram solo se ejecutan las acciones de `picos.acciones` (tres tipos:
+  `descargar_ollama`, `detener_proceso` por patrón, `pausar_cita`). El texto del botón nunca se ejecuta: si alguien
+  tomara el bot, no podría correr comandos en el servidor. Además solo se atienden botones de tu chat.
+- **Detener la tanda, no el bucle:** `detener_proceso` ignora shells (`bash -c "... patrón ..."`), así un bucle que
+  reintenta (como el etiquetado) sigue vivo y solo se corta el proceso que consume.
+- **Un pico es sostenido:** la CPU de la muestra *y* la carga de 1 min tienen que estar altas; un instante no avisa.
+  Un aviso por episodio: suena al empezar, se edita mientras dura y se cierra tras 2 vueltas normales.
+
 - **Desde afuera, sin tocar a los agentes:** si un agente se cuelga o su servicio cae, el que avisa no puede ser él
   mismo. El vigía corre aparte y solo lee.
 - **Timer apagado = detenido a propósito:** apagar un agente (por ejemplo `empleo` mientras se entrena su modelo)
@@ -90,7 +105,7 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
 ```bash
 .venv/bin/python -m agents.vigia.run --ver     # muestra el parte sin avisar
 .venv/bin/python -m agents.vigia.run --parte   # manda el parte ahora
-./scripts/oracle_vigia.sh oracle               # instala en la VM (timer cada 30 min)
+./scripts/oracle_vigia.sh oracle               # instala en la VM (timer cada 2 min)
 ```
 
 ## Límites

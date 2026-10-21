@@ -21,7 +21,7 @@ done
 ssh_vm 'sudo sh -c "chmod 600 /etc/credstore.encrypted/vigia_*.cred"'
 [ -f "$PROJECT/config/vigia.yaml" ] && scp -q "$PROJECT/config/vigia.yaml" "$VM:$R/config/" && ssh_vm "chmod 600 $R/config/vigia.yaml"
 
-echo "==> 2. Servicio y timer (cada 30 min)"
+echo "==> 2. Servicio y timer (cada 2 min)"
 ssh_vm "set -e
 sudo tee /etc/systemd/system/agentic-vigia.service >/dev/null <<'EOF'
 [Unit]
@@ -44,11 +44,11 @@ ReadWritePaths=$R/data
 EOF
 sudo tee /etc/systemd/system/agentic-vigia.timer >/dev/null <<'EOF'
 [Unit]
-Description=Corre el vigía cada 30 min
+Description=Corre el vigía cada 2 min (atiende los botones de los picos)
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=30min
+OnUnitActiveSec=2min
 Persistent=true
 
 [Install]
