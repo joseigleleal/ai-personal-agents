@@ -68,12 +68,12 @@ concreta vive en pocas direcciones. El resultado (el **adaptador**) pesa pocos M
 |---|---|---|
 | `model` | `Qwen/Qwen2.5-1.5B-Instruct` | Alumno que ya sabe seguir instrucciones |
 | `lora_parameters.rank` | 16 | Cuántas direcciones puede aprender: más capacidad, más riesgo de memorizar |
-| `lora_parameters.scale` | 20 | Cuánto pesa la corrección *B·A* frente a *W* |
+| `lora_parameters.scale` | 10 | Cuánto pesa la corrección *B·A* frente a *W* (con 20 divergió) |
 | `lora_parameters.dropout` | 0,05 | Apaga al azar parte de la corrección en cada paso para que no memorice |
 | `num_layers` | -1 | LoRA en todas las capas |
 | `mask_prompt` | true | La pérdida se calcula solo sobre la respuesta: el prompt es entrada, no se aprende |
 | `batch_size` · `grad_accumulation_steps` | 1 · 4 | Lote efectivo de 4 con la memoria de 1 |
-| `iters` · `learning_rate` | 600 · 1e-4 | ~1,7 pasadas sobre ~350 ejemplos, con pasos chicos |
+| `iters` · `learning_rate` | 150 · 3e-5 | ~1 pasada sobre 145 ejemplos, con pasos chicos (1e-4 divergió) |
 | `max_seq_length` | 2560 | Prompt + respuesta, en tokens |
 | `grad_checkpoint` | true | Recalcula en vez de guardar: más lento, menos memoria (~6 GB en total) |
 
@@ -83,7 +83,7 @@ por eso alcanza una Mac de 16 GB.
 **Cómo se sabe si aprendió.**
 - Separación 80/10/10: entrenamiento, **validación** (durante el entrenamiento) y **prueba** (solo al final; el
   alumno nunca la ve). Si la pérdida de entrenamiento baja y la de validación sube, está memorizando (*overfitting*);
-  por eso se guarda el adaptador cada 100 pasos.
+  por eso se valida y se guarda el adaptador cada 50 pasos.
 - `evaluar.py` mide lo que le importa al agente: JSON válido y completo, acierto por campo, puntaje con las mismas
   reglas del agente y si coincide la decisión de avisar.
 - **Línea base:** el mismo alumno sin LoRA. La diferencia entre base y LoRA es lo que aportó el entrenamiento.
@@ -158,7 +158,34 @@ OLLAMA_URL=http://localhost:11435 .venv/bin/python -m experimentos.lora_mlx.eval
 
 ## Resultados
 
-Pendiente: se completa al terminar el etiquetado y el entrenamiento.
+**Ronda 1 (2026-10-21)**, con 182 de 435 ofertas etiquetadas: el plan gratis de Groq tiene un tope de 200.000
+tokens por día (~90 ofertas), así que se entrenó con lo que había. 145 de entrenamiento, 18 de validación y 19 de
+prueba. Alumno `Qwen2.5-1.5B-Instruct`, Mac M4 de 16 GB.
+
+| Métrica (19 ofertas de prueba, contra el maestro) | Base, sin LoRA | LoRA |
+|---|---|---|
+| JSON válido | 94,7 % | **100 %** |
+| Acierto promedio por campo | 75,9 % | **91,2 %** |
+| Señales de estafa (`red_flags`) | 22,2 % | **89,5 %** |
+| Horario (`schedule`) | 55,6 % | **84,2 %** |
+| Tipo de contrato | 61,1 % | **78,9 %** |
+| Error medio en `skill_match` (0-10) | 1,83 | **1,26** |
+| Error medio en el puntaje final (0-10) | 2,56 | **1,16** |
+| Misma decisión de avisar (puntaje ≥ 7) | 73,7 % | **78,9 %** |
+| Segundos por oferta (MLX) | 12,1 | 10,7 |
+
+Lo que se aprendió en el camino:
+- **El primer intento divergió.** Con `learning_rate` 1e-4 y `scale` 20, la pérdida bajó hasta el paso 100 y luego
+  saltó (0,57 → 1,23 → 3,81). El adaptador del paso 100, aunque su pérdida de validación se veía bien, ya generaba
+  JSON roto (se comía las comillas de las claves): 0 % válido. Con 3e-5 y `scale` 10 la validación bajó en cada
+  control (0,871 → 0,252 → 0,230 → 0,210) y el formato quedó perfecto. La pérdida promedio no basta: hay que
+  evaluar la salida real.
+- **El alumno es conservador.** De las 5 ofertas de prueba que el maestro avisaría (puntaje ≥ 7), el alumno avisa
+  1; en las que el maestro descarta, coincide en todas. Como respaldo local no manda ruido, pero se pierde ofertas
+  buenas. La causa principal es que subestima `skill_match` en las ofertas que más encajan.
+
+**Siguiente ronda:** completar las 435 etiquetas, reentrenar con la misma configuración (más pasos) y ver si
+recupera las ofertas buenas; después cuantizar y medir en Ollama.
 
 ## Límites
 

@@ -54,7 +54,7 @@ def generador_ollama(modelo: str):
 
 def datos_oferta(prompt: str) -> tuple[str, bool]:
     """Título y si la oferta vino de una alerta por correo (pocos datos), sacados del prompt."""
-    titulo = prompt.split("\nTitle: ", 1)[1].split("\n", 1)[0]
+    titulo = prompt.split("JOB OFFER", 1)[-1].split("\nTitle: ", 1)[1].split("\n", 1)[0]  # no el del perfil
     return titulo, prompt.split("Description:\n", 1)[-1].startswith(EMAIL_MARK)
 
 

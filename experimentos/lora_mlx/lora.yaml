@@ -11,16 +11,16 @@ mask_prompt: true          # la pérdida se calcula solo sobre la respuesta, no 
 num_layers: -1             # LoRA en todas las capas
 lora_parameters:
   rank: 16
-  scale: 20.0
+  scale: 10.0               # con 20 y lr 1e-4 el entrenamiento divergió (ver Resultados)
   dropout: 0.05
 batch_size: 1
 grad_accumulation_steps: 4 # lote efectivo de 4 sin pagar la memoria de 4
-iters: 600                 # ~1,7 pasadas sobre ~350 ejemplos
-learning_rate: 1.0e-4
+iters: 150                 # ~1 pasada sobre 145 ejemplos; con 350, subir a ~350
+learning_rate: 3.0e-5      # 1e-4 hizo diverger el entrenamiento y rompió el formato del JSON
 max_seq_length: 2560       # system (~600 tokens) + oferta (hasta ~1200) + respuesta
 grad_checkpoint: true
 steps_per_report: 20
-steps_per_eval: 100
+steps_per_eval: 50
 val_batches: -1
-save_every: 100
+save_every: 50             # puntos de control para quedarse con el mejor si algo se tuerce
 seed: 7
