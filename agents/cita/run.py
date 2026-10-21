@@ -7,7 +7,7 @@ Si un paso falla, lo reintenta con más tiempo y, si sigue fallando, repite el r
 Lo que aprende de cada revisión queda en data/cita/aprendizaje.json (ver aprendizaje.py).
 
 Uso:
-    python -m agents.cita.run                 # launchd lo lanza cada 2 min; revisa solo si toca
+    python -m agents.cita.run                 # launchd lo lanza cada 1 min; revisa solo si toca
     python -m agents.cita.run --ya            # revisa ahora, sin esperar su turno
     python -m agents.cita.run --aprendizaje   # muestra lo aprendido y sale
     python -m agents.cita.run --solo-revisar  # comprueba si hay citas, pero no reserva

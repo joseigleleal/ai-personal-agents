@@ -15,7 +15,6 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 - Errores que se repiten: si un mismo tipo de error sale 3 veces seguidas (contando los reintentos), se
   aprende; desde entonces, apenas aparece, pausa `pausa_error_min` (5) en vez de reintentar, y luego sigue
   con el mismo ritmo. Se olvida si pasa 7 días sin aparecer.
-- Horas con bloqueos: si en una hora del día hubo 2+ bloqueos en la semana, en esa hora revisa 1,5× más lento.
 - Pausa tras un bloqueo, por tipo (la frase que lo delató): si al volver lo bloquean otra vez, la siguiente
   dura el doble; la que funcionó se recuerda para ese tipo y la próxima vez prueba un 25 % menos.
 - A qué horas aparecieron citas: en esas horas (y la anterior) revisa al doble de ritmo, sin bajar del piso.
@@ -140,7 +139,7 @@ class Aprendizaje:
 
     def respuesta_bloqueo(self, t: str, es_bloqueo: bool, cfg: dict | None = None) -> str | None:
         """Lo que respondiste en Telegram sobre el bloqueo anotado a la hora `t`.
-        Sí: cuenta para el piso, el tope por hora y las horas con bloqueos, y el ritmo sube un poco.
+        Sí: cuenta para el piso y el ritmo sube un poco.
         No: se levanta la pausa y la frase en ese paso se recuerda como falsa alarma.
         Devuelve un texto para el chat, o None si ya no está ese bloqueo."""
         ritmo = self.d["ritmo"]
@@ -166,8 +165,8 @@ class Aprendizaje:
 
     def error_fue_bloqueo(self, t: str, cfg: dict | None = None) -> str | None:
         """Respondiste en Telegram que el error de la hora `t` (p. ej. un 500 o un paso que no carga) era un
-        bloqueo encubierto: se aprende como un bloqueo confirmado (piso, tope por hora, ritmo un poco más
-        lento y pausa)."""
+        bloqueo encubierto: se aprende como un bloqueo confirmado (piso, ritmo un poco más lento
+        y pausa)."""
         cfg = cfg or {}
         r = next((r for r in reversed(self.d["revisiones"]) if r["t"] == t and r["r"] == "error"), None)
         if not r:

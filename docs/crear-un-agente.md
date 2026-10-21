@@ -60,5 +60,8 @@ lineal; LangGraph si tiene ramas, ciclos, pasos largos o pausas para aprobar. Gu
 
 Crea `agents/<nombre>/README.md` con la misma estructura que las otras fichas (qué hace, tabla de tipo,
 frecuencia, entradas y salidas, flujo, decisiones y uso) y agrega una fila en la tabla del `README.md`.
+La ficha incluye una sección **"Cómo funciona por dentro"** con tres partes: **"En palabras simples"** (sin
+jerga), **"Detalle técnico (para replicarlo)"** (archivos y piezas, una corrida paso a paso, estado y datos,
+reglas que deciden, para replicarlo) y **"Adaptarlo a tu caso"** (qué es genérico y qué cambiar para otro uso).
 Si tiene reglas que deciden (puntajes, filtros), agrega pruebas en `tests/test_<nombre>.py` con `unittest`;
 para el modelo, `FakeListChatModel` de LangChain evita usar red y claves.

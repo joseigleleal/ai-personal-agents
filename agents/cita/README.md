@@ -25,6 +25,120 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
                 ─▶ ✅ aviso con fecha/hora y justificante ─▶ crea data/cita/RESERVADA y deja de buscar
 ```
 
+## Cómo funciona por dentro
+
+### En palabras simples
+
+Conseguir una cita de este tipo es como esperar que se libere una mesa en un restaurante lleno: alguien
+cancela, la mesa queda libre unos segundos y gana quien llega primero. El agente hace de "persona en la
+puerta": cada minuto se despierta, decide si ya le toca mirar y, si le toca, abre un navegador invisible,
+recorre el sitio igual que una persona (provincia, trámite, identificación con certificado) y mira si hay citas.
+
+Si hay, avisa con una foto de la pantalla y reserva la primera que vea; si el formulario pide un dato que no
+tiene, o el código SMS, te lo pregunta por Telegram. Solo decide el ritmo (más seguido mientras todo va bien,
+sin pasar del límite que aprendió), las esperas de cada botón y cuándo reintentar. Lo dudoso te lo deja a ti:
+si una página parece un bloqueo o un error raro, te pregunta con dos botones y aprende de tu respuesta.
+
+### Detalle técnico (para replicarlo)
+
+**Archivos y piezas**
+
+| Archivo | Qué hace | Funciones/clases clave |
+|---|---|---|
+| `agents/cita/run.py` | Arranque, recorrido del sitio con Playwright, reserva, avisos y comandos de Telegram | `main`, `recorrido`, `Flujo` (`entrar`, `hay_citas`, `reservar`, `pulsar`, `completar_faltantes`), `lanzar`, `leer_respuestas`, `atender_comando` |
+| `agents/cita/aprendizaje.py` | Memoria que aprende (sin modelo de lenguaje) y la guarda en JSON | `Aprendizaje` (`timeout`, `orden`, `revision`, `piso`, `programar_siguiente`, `error_repetido`, `respuesta_bloqueo`) |
+| `agents/cita/fijar_ip.cjs` | Se precarga en el Node de Playwright (`NODE_OPTIONS=--require`) y fija la IP del sitio | reemplaza `dns.lookup` y `dns.promises.lookup` |
+| `core/notify.py` | Envíos a Telegram con un reintento a los 3 s; aviso de macOS como respaldo | `telegram`, `telegram_foto` (con botones), `telegram_album`, `macos` |
+| `core/config.py` | Lee `.env` y `config/cita.yaml` (o el `.example` si no existe) | `env`, `load_config` |
+| `scripts/oracle_cita.sh` | Instala el agente en una VM Linux con timer de systemd y claves cifradas | — |
+| `tests/test_cita.py` | Memoria y reserva completa contra un sitio simulado (`contexto.route`) | `PAGINAS`, `servir` |
+
+**Una corrida, paso a paso**
+
+1. launchd (o el timer de systemd) lanza `python -m agents.cita.run` cada 1 min. Si existe `data/cita/RESERVADA`, sale.
+2. `revisar_latido`: si pasaron más de 30 min sin arrancar, avisa. Si no hay otra revisión en curso,
+   `leer_respuestas` llama a `getUpdates` (con el `tg_offset` guardado): atiende comandos de tu chat y los
+   `callback_query` de los botones (`bloq:si|no:<hora>`, `err:si|no:<hora>`), responde con `answerCallbackQuery`
+   y edita el mensaje con `editMessageCaption`; registra el menú con `setMyCommands` si cambió.
+   `reportar_no_enviados` resume los avisos que no llegaron.
+3. Si no toca (`Aprendizaje.toca`, salvo `--ya`), hay pausa vigente (`pausa_hasta`) o un candado `corriendo` de
+   menos de 20 min, sale. Si sigue, crea el candado y reserva la próxima revisión a +20 min mientras corre.
+4. `ip_alcanzable`: prueba conexión al puerto 443; si la IP del DNS local no responde, consulta DNS sobre HTTPS
+   (Google y Cloudflare) y `fijar_ip` la fija. Si el sitio no responde, registra error y avisa (sin navegador).
+5. `lanzar`: `clave_verificada` valida con `cryptography` la cadena TLS (descarga el intermedio indicado en el
+   propio certificado y verifica contra `certifi`) y pasa su huella a Chromium con
+   `--ignore-certificate-errors-spki-list`. Abre Chromium (`headless` con user-agent normal) con el `.p12` en
+   `client_certificates` para los `certificado.origenes` de la config.
+6. `recorrido` → `Flujo.entrar`: inicio → provincia → oficina y trámite → botón Cl@ve → "Certificado electrónico"
+   → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
+7. `Flujo.hay_citas`: "no hay citas disponibles" → `sin_citas` (⏳ espaciado por `toca_aviso`). Página de error
+   del sitio → `ErrorDelSitio`; página sin el formulario esperado → `Inesperado`. Si ve el formulario: 🚨 con
+   captura (`avisar_con_foto`, en un hilo aparte) y sigue.
+8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina → contacto → primer horario → código SMS
+   (`esperar_codigo_telegram`, hasta 8 min) → Confirmar. Antes de cada envío, `completar_faltantes` busca
+   campos vacíos y pregunta por Telegram los que no conoce. Si ve "confirmada", crea `RESERVADA` y avisa ✅.
+9. Si algo falla: `revisar_bloqueo` (frases de `BLOCKED`) lanza `Bloqueado` → pausa y aviso ⛔. Otro error →
+   `recorrido` repite todo con cookies limpias hasta `reintentos`, salvo que ya se haya pulsado Confirmar o
+   que el tipo de error pida pausa (`error_repetido`). El último error se avisa en lenguaje claro
+   (`explicar_error`), como máximo una vez cada 3 h por mensaje (`error_nuevo`).
+10. Al final: `archivar` guarda capturas en el historial, `enviar_vista_si_cambio` manda `ultima.png` con
+    `sendPhoto` (con botones si es bloqueo o error nuevo), `programar_siguiente` fija la próxima revisión y se
+    borra el candado.
+
+**Estado y datos** (todo en `data/`, fuera de git)
+
+- `cita/aprendizaje.json`: memoria. Claves principales: `pasos` (por paso: `ok`, `fallos`, `timeout_ms`,
+  `ultimo_error`), `selectores` (el que funcionó por paso), `revisiones` (`t`, `r` = `sin_citas|hay_citas|reservada|error|bloqueo|falsa_alarma`,
+  `cada_s`, `paso`, `causa`; últimas 3000), `ritmo` (`intervalo_s`, `bloqueos` con `confirmado`, `piso_desde`,
+  `pausa_min`, `pausa_por_frase`, `falsas_alarmas`, `tipos_error`, `errores_pausa`, `racha`), `proxima`,
+  `ultimo_aviso`, `tg_offset`, `menu`. Se escribe de forma atómica (archivo `.tmp` + `os.replace`).
+- `cita/pausa_hasta`, `cita/corriendo`, `cita/RESERVADA`, `cita/latido`, `cita/ultimo_error`,
+  `cita/ultima_enviada`: archivos de control (texto o solo su fecha de modificación).
+- `cita/datos_extra.json`: campos del formulario que respondiste (`selector → {etiqueta, valor}`).
+- `cita/no_enviados.json`: avisos que Telegram no entregó (hora, qué, motivo; máx. 20).
+- Capturas: `cita/ultima/` y `cita/ultima.png` (se sobrescriben), `cita/bloqueos/` (50), `cita/paginas/`
+  (corridas con citas), `cita/historial/<día>/` (`historial_dias`). Registro: `cita.log`.
+
+**Reglas y cálculos que deciden** (el porqué está en "Decisiones de diseño")
+
+- Ritmo (`ritmo:` en la config; valores por defecto en `RITMO`): empieza en `inicial_s` 600, cada revisión
+  completa resta `baja_s` 30, entre `minimo_s` 60 y `maximo_s` 1800. Error o bloqueo sin confirmar: sin cambio.
+- Piso: `cada_s` del último bloqueo confirmado × `sube_bloqueo` (1,2), menos `baja_piso_s` (12) por cada
+  `horas_baja_piso` (2) sin bloqueos; nunca bajo `minimo_s`; vale `dias_piso` (7) días.
+- Próxima revisión: intervalo ±20 % al azar; en horas intensas (horas con citas en 60 días y la anterior, más
+  `horas_intensas`), la mitad, sin bajar del mínimo ni del piso.
+- Pausas: bloqueo `pausa_bloqueo_min` (5), ×2 si se repite al volver (tope 240 min), −25 % la próxima vez por
+  frase; error repetido 3 veces (`SEGUIDOS_PAUSA`) → `pausa_error_min` (5), recordado 7 días.
+- Espera por paso: 30 s base, ×1,5 si se agota (tope 90 s), −10 % por éxito. `pulsar` reintenta una vez el paso.
+- Recorrido: `reintentos` (2) repeticiones; espera `espera_reintento_s` (15) × 2^intento, 0 con citas a la vista.
+- Datos que faltan: `espera_dato_min` (4); SMS: 8 min. Aviso ⏳: `aviso_sin_citas_min` (30).
+
+**Para replicarlo**
+
+- `pip install -r requirements.txt` (usa `playwright`, `requests`, `cryptography`, `pyyaml`, `python-dotenv`) y
+  `python -m playwright install chromium` (en Linux, `--with-deps`).
+- Un bot de Telegram (BotFather) al que le hayas enviado `/start`, y un certificado digital exportado como `.p12`.
+- `.env`: `CITA_CERT_PASSWORD`, `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`, u opcionalmente
+  `TELEGRAM_BOT_TOKEN_CITA` y `TELEGRAM_CHAT_ID_CITA` para un bot propio.
+- Copiar `config/cita.example.yaml` a `config/cita.yaml`, probar con `--ya --solo-revisar` y programarlo (ver "Uso").
+
+### Adaptarlo a tu caso
+
+- **Genérico (reutilizable tal cual):** `aprendizaje.py` completo (ritmo, piso, pausas, tiempos por paso,
+  selector recordado); `Flujo.pulsar`, `foto`, `revisar_bloqueo` y `completar_faltantes`; el arranque de `main`
+  (candado, pausa, `toca`, latido); `leer_respuestas`, `atender_comando`, `enviar_vista_si_cambio`, el historial
+  y `no_enviados`; `core/notify.py`; el patrón de corrida única programada cada minuto.
+- **Específico de este sitio:** `ICP_HOST`/`ICP`, los textos `NO_CITAS`, `BLOCKED`, `ERRORES_SITIO` y
+  `SESION_CADUCADA`, los selectores (`#btnAceptar`, `#txtIdCitado`, `#btnConfirmar`…) y la vuelta de Cl@ve.
+- **Para otro sitio de citas o turnos:** reescribir `Flujo.entrar`, `Flujo.hay_citas` y `Flujo.reservar` con
+  sus pasos y selectores (cada clic con `pulsar("<paso>", "<selector>", "<alternativo>")`), ajustar las
+  constantes de textos y `PASOS` (nombres claros para los avisos), y los campos de la config que lea.
+- **Sin certificado:** si no existe el `.p12` (`certificado.archivo`), `lanzar` no pasa `client_certificates`; si
+  el sitio envía bien su cadena TLS, se puede quitar la llamada a `clave_verificada` en `lanzar`. `ip_alcanzable`/`fijar_ip.cjs`
+  solo hacen falta si el DNS local falla.
+- **Otro trámite sin reserva:** `--solo-revisar` ya avisa sin reservar; basta con cambiar `hay_citas`.
+- Actualizar `tests/test_cita.py` (`PAGINAS`) con el HTML del nuevo sitio para ensayar sin red.
+
 ## Decisiones de diseño (y por qué)
 
 - **Modo fantasma (sin ventana).** Usa Chromium completo en modo *headless* con un user-agent normal: el
@@ -43,7 +157,8 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
   un poco después de cargar), y eso reenviaba fotos iguales.
 - **Certificado como archivo `.p12`.** Chrome solo elige un certificado de forma automática con políticas de
   empresa (MDM). Playwright entrega el certificado directamente (`client_certificates`) al servidor de Cl@ve
-  que lo pide. El `.p12` que exporta macOS usa cifrado antiguo: se re-cifra con AES-256.
+  que lo pide. El `.p12` que exporta macOS usa cifrado antiguo: hay que re-cifrarlo con AES-256 antes de usarlo
+  (`openssl pkcs12 -legacy -in viejo.p12 -nodes | openssl pkcs12 -export -out data/cita/certificado.p12`).
 - **Cadena TLS validada por el agente.** El servidor de citas no envía su certificado intermedio y el
   navegador a veces lo rechaza. El agente descarga el intermedio, valida la cadena completa y el nombre del
   sitio contra las raíces de confianza, y **solo entonces** le indica al navegador que acepte esa clave.
