@@ -29,6 +29,7 @@ import subprocess
 import threading
 import time
 import warnings
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -670,7 +671,9 @@ def enviar_vista_si_cambio(estado: str, bloqueo_t: str | None = None, error_t: s
                     "cambio el ritmo. Lo que respondas vale para este tipo de error: no te vuelvo a preguntar.")
     texto = (f"🖼️ {datetime.now():%H:%M} Cita: {estado.replace('_', ' ')}" + (f" ({causa})" if causa else "")
              + "." + pregunta)
-    if notify.telegram_foto(VISTA, texto, "cita", botones=botones):
+    # con sonido solo si pide respuesta (botones) o hay citas; volver a "sin citas" llega en silencio
+    silencio = not botones and not estado.startswith("hay_citas")
+    if notify.telegram_foto(VISTA, texto, "cita", silent=silencio, botones=botones):
         VISTA_ENVIADA.write_text(estado)
         log(f"Captura enviada por Telegram (cambió a «{estado}»).")
     else:
@@ -801,8 +804,8 @@ def atender_comando(texto: str, mem: Aprendizaje, cfg: dict) -> None:
             lineas.append(f"⏸️ En pausa hasta {PAUSE.read_text().strip().replace('T', ' ')}")
         if LOCK.exists():
             lineas.append("🔄 Hay una revisión en curso.")
-        lineas.append(f"Próxima: {(mem.d.get('proxima') or '?').replace('T', ' ')[:16]} · ritmo "
-                      f"~{mem.intervalo(cfg) / 60:.1f} min")
+        lineas.append(f"Próxima: {(mem.d.get('proxima') or '?').replace('T', ' ')[:16]} · ciclo "
+                      f"~{ciclo_texto(mem, cfg)}")
         lineas.append(mem.informe(24).split("\n")[0])
         responder("\n".join(lineas))
     elif cmd == "/informe":
@@ -862,6 +865,48 @@ def guardar_paginas() -> None:
         log(f"No pude guardar las páginas de la reserva: {e}")
 
 
+def ciclo_texto(mem: Aprendizaje, cfg: dict) -> str:
+    """El ritmo como lo ves llegar: ciclo real medido (revisión + espera) y, aparte, la espera aprendida."""
+    espera, ciclo = mem.intervalo(cfg) / 60, mem.ciclo_real()
+    return (f"{ciclo / 60:.1f} min (espera {espera:.1f} min tras cada revisión)" if ciclo
+            else f"{espera:.1f} min de espera tras cada revisión")
+
+
+def actualizar_estado(mem: Aprendizaje, cfg: dict) -> None:
+    """Un solo mensaje de Telegram que se edita en cada revisión (sin sonido ni mensajes nuevos): el tablero de
+    `cita`. Si lo borras, manda otro. Se apaga con `estado_editable: false` (vuelve el ⏳ por revisión)."""
+    if not cfg.get("estado_editable", True):
+        return
+    desde = f"{datetime.now() - timedelta(hours=1):%Y-%m-%dT%H:%M}"
+    hora = Counter(r["r"] for r in mem.d["revisiones"] if r["t"] >= desde)
+    r = mem.d["revisiones"][-1] if mem.d["revisiones"] else {}
+    lineas = [f"⏳ Cita · actualizado {datetime.now():%H:%M}",
+              "Última revisión: " + (r.get("r", "?").replace("_", " ") + (f" al {PASOS.get(r['paso'], r['paso'])}"
+                                                                          if r.get("paso") else "")),
+              f"Última hora: {sum(hora.values())} revisiones ("
+              + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in hora.most_common()) + ")",
+              f"Ciclo: ~{ciclo_texto(mem, cfg)}"]
+    if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
+        lineas.append(f"⏸️ En pausa hasta {PAUSE.read_text().strip()[11:16]}")
+    else:
+        lineas.append(f"Próxima: {(mem.d.get('proxima') or '?')[11:16]}")
+    lineas.append("Solo suena si hay citas, piden algo o hay un bloqueo o error nuevo.")
+    mid = notify.telegram_estado("\n".join(lineas), "cita", mem.d.get("estado_msg"))
+    if mid:
+        mem.d["estado_msg"] = mid
+
+
+def resumen_diario(mem: Aprendizaje, cfg: dict) -> None:
+    """Una vez al día, desde `resumen_diario_hora` (21), el informe de las últimas 24 h, en silencio."""
+    hoy, hora = f"{datetime.now():%Y-%m-%d}", cfg.get("resumen_diario_hora", 21)
+    if hora is None or datetime.now().hour < int(hora) or mem.d.get("resumen_dia") == hoy:
+        return
+    if notify.telegram("🗓️ Resumen del día\n" + mem.informe(24) + f"\nCiclo: ~{ciclo_texto(mem, cfg)}",
+                       "cita", silent=True):
+        mem.d["resumen_dia"] = hoy
+        mem.guardar()
+
+
 def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None:
     """Entrada → comprobación → reserva. Si algo falla antes de Confirmar, repite el recorrido completo
     (sesión nueva) hasta `reintentos` veces; con citas a la vista reintenta sin esperar."""
@@ -879,10 +924,11 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
                 if not flujo.hay_citas():
                     log("Sin citas disponibles." + (" (se agotaron)" if vio_citas else ""))
                     mem.revision("sin_citas", cfg=cfg)
-                    if mem.toca_aviso(cfg.get("aviso_sin_citas_min", 30)):
+                    # con el mensaje de estado (se actualiza solo, sin sonido) no hace falta un ⏳ por revisión
+                    if not cfg.get("estado_editable", True) and mem.toca_aviso(cfg.get("aviso_sin_citas_min", 30)):
                         if not notify.telegram(f"⏳ {datetime.now():%H:%M} Sin citas de toma de huellas en "
                                                f"{cfg['provincia']}. Sigo revisando cada "
-                                               f"~{mem.intervalo(cfg) / 60:.1f} min.", "cita"):
+                                               f"~{ciclo_texto(mem, cfg)}.", "cita", silent=True):
                             no_enviado("⏳ sin citas")
                     return
                 if not vio_citas:
@@ -944,6 +990,7 @@ def main() -> None:
     if not LOCK.exists() or time.time() - LOCK.stat().st_mtime >= 20 * 60:  # sin otra revisión escribiendo
         leer_respuestas(mem, cfg)
         reportar_no_enviados()
+        resumen_diario(mem, cfg)
     if not args.ya and not mem.toca():  # launchd lanza cada 1 min; la memoria decide el ritmo
         return
     if PAUSE.exists() and datetime.now() < datetime.fromisoformat(PAUSE.read_text().strip()):
@@ -1033,6 +1080,7 @@ def main() -> None:
             cuando, piso = mem.programar_siguiente(cfg), mem.piso(cfg)
             log(f"Próxima revisión: {cuando:%H:%M} (ritmo ~{mem.intervalo(cfg) / 60:.1f} min"
                 + (f", piso aprendido {piso / 60:.1f} min" if piso else "") + ")")
+        actualizar_estado(mem, cfg)
         mem.guardar()
         LOCK.unlink(missing_ok=True)
 

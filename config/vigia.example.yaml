@@ -1,0 +1,24 @@
+# Copiar como config/vigia.yaml (fuera de git) y ajustar. El vigía audita a los demás agentes y avisa solo si algo
+# anda mal (con sonido, una vez por problema); cuando se arregla, "resuelto" en silencio.
+parte_diario_hora: 9      # parte de todos los agentes, una vez al día y sin sonido (vacío = no)
+
+agentes:
+  cita:
+    tipo: cita                         # chequeos propios: lee su memoria (próxima revisión, errores, pausa)
+    servicio: agentic-cita             # systemd: si el timer está apagado se da por detenido a propósito
+    memoria: data/cita/aprendizaje.json
+    atraso_max_min: 15                 # tenía que revisar a las X y pasaron más de N min sin hacerlo
+    pausa_max_min: 90                  # una pausa más larga que esto se avisa
+    max_errores_pct: 50                # % de revisiones con error o bloqueo en la última hora
+    min_revisiones: 4                  # con menos revisiones en la hora no se juzga el %
+  empleo:
+    servicio: agentic-empleo
+    log: data/empleo.log               # agentes por corridas: el log tiene que crecer
+    log_max_min: 180                   # corre cada 2 h: 3 h sin escribir es un problema
+    frases_error: ["No se pudo puntuar", "Traceback"]
+    max_frases_error: 3
+
+sistema:
+  disco_max_pct: 85
+  ram_min_libre_pct: 10
+  servicios: [ollama]                  # servicios de systemd que deben estar activos

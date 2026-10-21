@@ -5,7 +5,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-AGENTS=(freelance fx empleo cita recordatorio)
+AGENTS=(freelance fx empleo cita recordatorio vigia)
 ok()   { printf "  \033[32m●\033[0m %s\n" "$1"; }
 off()  { printf "  \033[90m○\033[0m %s\n" "$1"; }
 warn() { printf "  \033[33m▲\033[0m %s\n" "$1"; }

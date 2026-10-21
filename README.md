@@ -13,6 +13,7 @@ lectura y comparte la misma base.
 | `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
 | `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
 | `recordatorio` | Envía cada mañana los pendientes de configuración y sus pasos | No | Diario 9:00 | [README](agents/recordatorio/README.md) |
+| `vigia` | Audita a los demás agentes desde afuera (¿revisan a tiempo?, ¿fallan seguido?, ¿se cayó el servicio?) y el servidor; avisa solo cuando algo cambia y manda un parte diario en silencio | No | 30 min | [README](agents/vigia/README.md) |
 
 ¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md) · [Agentes con LangChain y LangGraph](docs/langgraph.md)
 
@@ -195,11 +196,14 @@ nohup caffeinate -i ./scripts/oracle_crear_vm.sh >/dev/null 2>&1 &   # micro (1 
 git clone https://github.com/<usuario>/ai-personal-agents.git ~/personal-agents
 cd ~/personal-agents && ./scripts/setup_oracle.sh   # instala todo y activa los timers de freelance, fx y empleo (cita: oracle_cita.sh)
 
-# Desde la Mac: el agente cita en la VM A1, con claves cifradas (ver agents/cita/README.md)
-./scripts/oracle_cita.sh ubuntu@<ip>
+# Desde la Mac, cada agente a la VM con sus claves cifradas (systemd-creds) y su timer
+./scripts/oracle_cita.sh ubuntu@<ip>      # cita (ver agents/cita/README.md)
+./scripts/oracle_empleo.sh <host-ssh>     # empleo, con Ollama en la VM para el modelo de respaldo
+./scripts/oracle_vigia.sh <host-ssh>      # vigía: audita a los demás cada 30 min
 ```
 
-Para actualizar el servidor basta con `git push`: en cada corrida hace `git pull`.
+Los agentes de `setup_oracle.sh` hacen `git pull` en cada corrida. Los instalados con `oracle_*.sh` corren
+directo: para actualizarlos, `git pull` en la VM.
 
 ## Repo público
 

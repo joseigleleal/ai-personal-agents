@@ -122,6 +122,14 @@ class Memoria(unittest.TestCase):
         self.assertEqual(self.mem.piso(), 60)  # nunca bajo el mínimo
         self.assertEqual(self.mem.piso({"ritmo": {"horas_baja_piso": 0}}), 180)  # 0 = no baja
 
+    def test_ciclo_real_es_la_mediana_entre_inicios(self):
+        ahora = datetime.now()
+        self.mem.d["revisiones"] = [{"t": f"{ahora - timedelta(minutes=m):%Y-%m-%dT%H:%M}", "r": "sin_citas"}
+                                    for m in (25, 20, 15, 9, 4)]
+        self.assertEqual(self.mem.ciclo_real(), 5 * 60)  # huecos 5, 5, 6, 5 → mediana 5 min
+        self.mem.d["revisiones"] = self.mem.d["revisiones"][-2:]
+        self.assertIsNone(self.mem.ciclo_real())  # con menos de 3 huecos no se estima
+
     def test_error_repetido_aprende_a_pausar(self):
         self.assertFalse(self.mem.error_repetido("tramite", "no respondió a tiempo"))
         self.assertFalse(self.mem.error_repetido("tramite", "no respondió a tiempo"))
@@ -343,6 +351,27 @@ class SitioSimulado(unittest.TestCase):
             with self.assertRaises(run.Inesperado):
                 run.recorrido(self.contexto, CFG, self.mem, solo_revisar=True)
         self.avisar_con_foto.assert_not_called()
+
+    def test_estado_se_edita_y_resumen_una_vez_al_dia(self):
+        for m in (12, 7, 2):
+            self.mem.d["revisiones"].append({"t": f"{datetime.now() - timedelta(minutes=m):%Y-%m-%dT%H:%M}",
+                                             "r": "sin_citas"})
+        with mock.patch.object(run.notify, "telegram_estado", return_value=77) as estado:
+            run.actualizar_estado(self.mem, CFG)
+            run.actualizar_estado(self.mem, CFG)
+        self.assertEqual(self.mem.d["estado_msg"], 77)
+        self.assertEqual(estado.call_args.args[2], 77)  # la segunda vez edita el mismo mensaje
+        self.assertIn("Última hora: 3 revisiones (sin citas 3)", estado.call_args.args[0])
+        self.assertIn("espera", estado.call_args.args[0])
+        with mock.patch.object(run.notify, "telegram_estado") as estado:
+            run.actualizar_estado(self.mem, {**CFG, "estado_editable": False})
+        estado.assert_not_called()
+        with mock.patch.object(run.notify, "telegram", return_value=True) as tg, \
+                mock.patch.object(run.Aprendizaje, "guardar"):
+            run.resumen_diario(self.mem, {"resumen_diario_hora": 0})
+            run.resumen_diario(self.mem, {"resumen_diario_hora": 0})
+        tg.assert_called_once()
+        self.assertTrue(tg.call_args.kwargs["silent"])
 
     def test_sin_afplay_no_corta_el_aviso(self):
         with mock.patch.object(run.shutil, "which", return_value=None), \

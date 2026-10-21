@@ -10,7 +10,7 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
 | Frecuencia | launchd lo lanza cada 1 min; revisa según el ritmo aprendido (1–30 min, empieza en 10), las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (avisos; "sin citas" como mucho cada 30 min; responde comandos) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · historial de capturas por revisión en `data/cita/historial/` (14 días) · memoria `data/cita/aprendizaje.json` |
+| Salidas | Telegram (un mensaje de estado que se edita solo; suena solo si hay citas, piden algo o hay un bloqueo o error nuevo; resumen diario; responde comandos) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · historial de capturas por revisión en `data/cita/historial/` (14 días) · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -223,8 +223,15 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   un "latido"; si pasaron más de 30 min sin ninguno, avisa por Telegram al volver.
 - **Ritmo decidido por el agente.** launchd lo lanza cada 1 min, pero solo revisa cuando toca según la
   memoria; así puede acelerar o frenar sin reinstalar nada.
-- **Avisos "sin citas" espaciados.** Con revisiones cada 1-2 min, avisar cada una sería ruido: el ⏳ sale
-  como mucho cada `aviso_sin_citas_min` (30 por defecto; 0 = en cada revisión) e indica el ritmo actual.
+- **Un mensaje de estado en vez de un ⏳ por revisión.** Con revisiones cada pocos minutos, un mensaje por cada una
+  era ruido. Ahora el bot edita siempre el mismo mensaje (`notify.telegram_estado`, `editMessageText`): última
+  revisión, conteo de la última hora, ciclo y próxima. Suena solo lo que pide atención (citas, SMS, dato que falta,
+  bloqueo o error nuevo); volver a "sin citas" llega en silencio, y a las `resumen_diario_hora` (21) llega el
+  resumen de 24 h sin sonido. Con `estado_editable: false` vuelve el ⏳ cada `aviso_sin_citas_min`.
+- **Ciclo real, no solo la espera.** El ritmo aprendido es la espera *después* de cada revisión; el ciclo que se ve
+  llegar suma lo que dura la revisión (~1,4 min) y la espera del timer. Los mensajes muestran el ciclo medido
+  (`Aprendizaje.ciclo_real`, mediana entre inicios). No se acortó la espera para igualarlo: el piso se aprendió con
+  ese ciclo y acortarlo traería bloqueos. En el servidor el timer mira cada 20 s para no sumar demora inútil.
 - **Código SMS por Telegram.** Al reservar, el sitio manda un SMS al teléfono de `config/cita.yaml`. El agente
   avisa "📱 Te llegó un SMS" con sonido y espera hasta 8 min a que respondas **en el chat del bot del agente**
   solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y

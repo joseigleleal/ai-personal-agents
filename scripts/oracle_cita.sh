@@ -7,7 +7,7 @@
 #  1. Instala git, Python, Chromium (con sus librerías y fuentes), fail2ban y actualizaciones automáticas.
 #  2. Cifra CITA_CERT_PASSWORD y el bot de Telegram con systemd-creds (se descifran solo en memoria al correr).
 #  3. Copia certificado, config/cita.yaml y la memoria del agente con permisos 600.
-#  4. Endurece SSH (sin root, solo el usuario ubuntu), pone la hora de España y crea servicio + timer (cada 1 min).
+#  4. Endurece SSH (sin root, solo el usuario ubuntu), pone la hora de España y crea servicio + timer (cada 20 s).
 #  5. Quita `cita` de launchd en la Mac: el sitio no tolera dos sesiones de la misma persona a la vez.
 set -euo pipefail
 
@@ -71,11 +71,11 @@ ReadWritePaths=$R/data /home/ubuntu/.cache
 EOF
 sudo tee /etc/systemd/system/agentic-cita.timer >/dev/null <<'EOF'
 [Unit]
-Description=Lanza el agente cita cada 1 min (el agente decide si toca revisar)
+Description=Lanza el agente cita cada 20 s (el agente decide si toca revisar)
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=1min
+OnUnitActiveSec=20s
 AccuracySec=5s
 
 [Install]

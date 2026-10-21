@@ -6,7 +6,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-AGENTS=(freelance fx empleo cita recordatorio)
+AGENTS=(freelance fx empleo cita recordatorio vigia)
 
 for a in "${AGENTS[@]}"; do
   if launchctl bootout "gui/$(id -u)/com.agentic.$a" 2>/dev/null; then echo "Agente $a detenido"; fi

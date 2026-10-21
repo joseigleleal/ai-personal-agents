@@ -169,6 +169,7 @@ cp config/empleo.example.yaml config/empleo.yaml
 .venv/bin/python -m agents.empleo.run --estado         # ¿quedó una corrida a medias?
 .venv/bin/python -m unittest tests.test_empleo -v      # pruebas sin red ni claves
 ./scripts/instalar_launchd.sh empleo
+./scripts/oracle_empleo.sh <host-ssh>                  # o en la VM: claves cifradas, Ollama y timer cada 2 h
 ```
 
 ## Límites

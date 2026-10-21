@@ -5,7 +5,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-AGENTS=(freelance fx empleo cita recordatorio)
+AGENTS=(freelance fx empleo cita recordatorio vigia)
 
 for a in "${AGENTS[@]}"; do
   plist="$HOME/Library/LaunchAgents/com.agentic.$a.plist"

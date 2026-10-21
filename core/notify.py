@@ -54,6 +54,29 @@ def telegram(text: str, agent: str | None = None, silent: bool = False) -> bool:
     )
 
 
+def telegram_estado(text: str, agent: str | None = None, message_id: int | None = None) -> int | None:
+    """Mensaje de estado que se actualiza en el lugar: edita `message_id` y, si no se puede (no existe o lo
+    borraste), manda uno nuevo en silencio. Devuelve el id del mensaje (guárdalo para la próxima) o None."""
+    suffix = f"_{agent.upper()}" if agent else ""
+    token = env(f"TELEGRAM_BOT_TOKEN{suffix}") or env("TELEGRAM_BOT_TOKEN")
+    chat_id = env(f"TELEGRAM_CHAT_ID{suffix}") or env("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return None
+    api = f"https://api.telegram.org/bot{token}"
+    text = text[:TELEGRAM_LIMIT]
+    try:
+        if message_id:
+            r = requests.post(f"{api}/editMessageText", timeout=20, json={
+                "chat_id": chat_id, "message_id": message_id, "text": text, "disable_web_page_preview": True})
+            if r.ok or "not modified" in r.text:  # "message is not modified": el texto ya era ese
+                return message_id
+        r = requests.post(f"{api}/sendMessage", timeout=20, json={
+            "chat_id": chat_id, "text": text, "disable_web_page_preview": True, "disable_notification": True})
+        return r.json()["result"]["message_id"] if r.ok else None
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+
+
 def telegram_foto(path, caption: str, agent: str | None = None, silent: bool = False,
                   botones: list[tuple[str, str]] | None = None) -> bool:
     """Envía una imagen (p. ej. una captura) por el mismo bot que telegram().

@@ -6,7 +6,9 @@ data/
 *.log
 
 # Entorno y editores
+.venv
 .venv/
+*.nosync
 __pycache__/
 .idea/
 .DS_Store

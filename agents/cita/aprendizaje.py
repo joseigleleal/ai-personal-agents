@@ -287,6 +287,14 @@ class Aprendizaje:
                  if r["r"] == "hay_citas" and r["t"] >= desde}
         return {h % 24 for x in horas for h in (x - 1, x)} | {int(h) for h in extra}
 
+    def ciclo_real(self, horas: float = 2) -> int | None:
+        """Segundos reales entre el inicio de una revisión y el de la siguiente (mediana de las últimas `horas`).
+        Es más que `intervalo`: suma lo que dura cada revisión y la espera hasta que el timer la lanza."""
+        desde = f"{datetime.now() - timedelta(hours=horas):%Y-%m-%dT%H:%M}"
+        ts = [datetime.fromisoformat(r["t"]) for r in self.d["revisiones"] if r["t"] >= desde]
+        huecos = sorted((b - a).total_seconds() for a, b in zip(ts, ts[1:]) if b > a)
+        return int(huecos[len(huecos) // 2]) if len(huecos) >= 3 else None
+
     def toca_aviso(self, minutos: int) -> bool:
         """El aviso ⏳ sin citas sale como mucho cada `minutos` (0 = en cada revisión)."""
         ultimo = self.d.get("ultimo_aviso")

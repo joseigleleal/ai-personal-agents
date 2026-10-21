@@ -22,7 +22,9 @@ ritmo:
   dias_piso: 7                  # días que se recuerda el piso de un bloqueo (0 = no frena: solo pausa)
   horas_baja_piso: 2            # cada N horas sin bloqueos el piso baja un poco (0 = no baja)
   baja_piso_s: 12               # cuánto baja el piso cada vez (12 s: 3,0 → 2,8 → 2,6 min…)
-aviso_sin_citas_min: 30         # el ⏳ "sin citas" sale como mucho cada N min (0 = en cada revisión)
+estado_editable: true           # un solo mensaje de estado que se edita en cada revisión (sin sonido)
+aviso_sin_citas_min: 30         # solo con estado_editable: false: el ⏳ "sin citas" como mucho cada N min
+resumen_diario_hora: 21         # resumen de las últimas 24 h, una vez al día y sin sonido (vacío = no)
 horas_intensas: []              # opcional, ej. [8, 9, 14]: al doble de ritmo (además de las aprendidas)
 reintentos: 2                   # si un recorrido falla antes de Confirmar, se repite hasta N veces
 espera_reintento_s: 15          # espera antes del 1.er reintento (se duplica); con citas a la vista, 0
