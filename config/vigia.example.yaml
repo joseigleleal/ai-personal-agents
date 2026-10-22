@@ -19,6 +19,13 @@ agentes:
     log_max_min: 180                   # corre cada 2 h: 3 h sin escribir es un problema
     frases_error: ["No se pudo puntuar", "Traceback"]
     max_frases_error: 3
+  # etiquetado:                      # proceso largo sin timer (systemd-run con un bucle)
+  #   servicio: lora-etiquetar
+  #   continuo: true                 # si deja de estar activo, avisa (terminó o se cayó)
+  #   log: data/lora/etiquetar.log
+  #   log_max_min: 60
+  #   frases_error: ["Traceback"]
+  #   max_frases_error: 1
 
 sistema:
   disco_max_pct: 85

@@ -133,3 +133,19 @@ class Vigia(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServicioContinuo(unittest.TestCase):
+    def revisar(self, estado):
+        with mock.patch.object(run.shutil, "which", return_value="/bin/systemctl"), \
+             mock.patch.object(run, "systemd", return_value=estado):
+            return run.revisar_servicio("etiquetado", {"servicio": "lora-etiquetar", "continuo": True})
+
+    def test_activo_sigue_con_el_log(self):
+        self.assertEqual(self.revisar("active"), ({}, [], True))
+
+    def test_inactivo_se_avisa(self):
+        problemas, _, activo = self.revisar("inactive")
+        self.assertIn("etiquetado:detenido", problemas)
+        self.assertFalse(activo)
+

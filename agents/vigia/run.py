@@ -54,9 +54,15 @@ def ruta(texto: str) -> Path:
 
 # --- Chequeos: cada uno devuelve (problemas {clave: texto}, líneas para el parte) ----------------------------
 def revisar_servicio(nombre: str, c: dict) -> tuple[dict, list[str], bool]:
-    """Timer apagado = agente detenido a propósito (no es problema). Servicio "failed" sí lo es."""
+    """Timer apagado = agente detenido a propósito (no es problema). Servicio "failed" sí lo es.
+    `continuo: true` = servicio sin timer que corre siempre (un bucle): si no está activo, terminó o se cayó."""
     servicio = c.get("servicio")
     if not servicio or not shutil.which("systemctl"):
+        return {}, [], True
+    if c.get("continuo"):
+        estado = systemd("is-active", f"{servicio}.service")
+        if estado != "active":
+            return {f"{nombre}:detenido": f"el servicio {servicio} está «{estado}» (¿terminó o se cayó?)"}, [], False
         return {}, [], True
     if systemd("is-enabled", f"{servicio}.timer") != "enabled":
         return {}, ["⏹️ detenido (timer apagado)"], False

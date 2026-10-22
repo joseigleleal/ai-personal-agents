@@ -76,6 +76,8 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
   cambios de estado (problema nuevo / resuelto) y un parte diario. Sirve para cualquier conjunto de tareas
   programadas (cron, systemd, launchd).
 - **Otro agente por corridas:** agregar una entrada con `servicio`, `log`, `log_max_min` y `frases_error`.
+- **Un proceso largo sin timer** (un bucle con `systemd-run`): la misma entrada con `continuo: true`; si el
+  servicio deja de estar activo (terminó o se cayó) se avisa, y mientras corre se revisa su log.
 - **Un agente con estado propio:** escribir una función como `revisar_cita` que lea su archivo de estado y marcarla
   con `tipo:` en la config.
 - **Otro canal:** cambiar `notify.telegram` en `avisar_cambios` y `main`.
