@@ -181,6 +181,7 @@ class Flujo:
         self.paso = "inicio"         # último paso alcanzado (para el log y la memoria)
         self.confirmando = False     # tras pulsar Confirmar ya no se repite el recorrido
         self.vio_citas = False       # con citas a la vista los reintentos van todos y sin esperar
+        self.url_previa = ""         # pantalla en que se pulsó el último botón (para volver a ella)
 
     def foto(self, nombre: str, guardar_en: Path | None = None) -> None:
         """Captura y HTML de la página: el HTML sirve para ensayar la reserva sin el sitio real.
@@ -248,15 +249,27 @@ class Flujo:
                     raise
                 log(f"«{e}» en «{paso}»: vuelvo a la pantalla anterior y reintento ({vuelta + 1}/{veces}).")
                 self.foto(f"rechazo_{paso}")
-                try:
-                    self.page.go_back(wait_until="domcontentloaded", timeout=self.mem.timeout(paso))
-                except PlaywrightError:
-                    raise e from None
-                if not any(self.hay(s) for s in selectores):  # la pantalla anterior no volvió: recorrido nuevo
+                if not self.volver(selectores):  # la pantalla anterior no volvió: recorrido nuevo
                     self.mem.resultado_vuelta(paso, vuelta + 1, False, self.cfg)
                     raise e from None
                 if not self.vio_citas:
                     self.page.wait_for_timeout(self.cfg.get("espera_reintento_paso_s", 5) * 1000)
+
+    def volver(self, selectores: tuple[str, ...]) -> bool:
+        """Vuelve a la pantalla del botón: «atrás» del navegador y, si el sitio no lo deja (pasó con un 500 en
+        provincia: la página no cambió), abre de nuevo su dirección con la misma sesión."""
+        for ir in (lambda: self.page.go_back(wait_until="domcontentloaded", timeout=self.mem.timeout(self.paso)),
+                   lambda: self.page.goto(self.url_previa, wait_until="domcontentloaded",
+                                          timeout=self.mem.timeout(self.paso))):
+            try:
+                ir()
+            except PlaywrightError:
+                continue
+            if any(self.hay(s) for s in selectores):
+                return True
+            if not self.url_previa:
+                break
+        return False
 
     def esperar_boton(self, selectores: tuple[str, ...], espera: int) -> None:
         """Espera el botón; si la página ya cargó entera y a los `recargar_tras_s` (20) sigue sin aparecer,
@@ -282,7 +295,7 @@ class Flujo:
         La espera sale de la memoria (crece si el paso suele tardar). Si se agota, reintenta una vez
         con más tiempo; si la página cambió igual (llegó tarde), lo da por bueno.
         """
-        self.paso = paso
+        self.paso, self.url_previa = paso, self.page.url
         for intento in range(2 if reintentar else 1):
             espera, antes = self.mem.timeout(paso), self.page.url
             try:

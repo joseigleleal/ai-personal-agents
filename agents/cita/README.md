@@ -111,7 +111,8 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   frase; error repetido 3 veces (`SEGUIDOS_PAUSA`) → `pausa_error_min` (5), recordado 7 días.
 - Espera por paso: 30 s base, ×1,5 si se agota (tope 90 s), −10 % por éxito. `pulsar` reintenta una vez el paso.
 - Recorrido: `reintentos` (2) repeticiones; espera `espera_reintento_s` (15) × 2^intento, 0 con citas a la vista.
-- Error del sitio en un botón (502, 500, «requested url was rejected»): `pulsar` vuelve a la pantalla anterior,
+- Error del sitio en un botón (502, 500, «requested url was rejected»): `pulsar` vuelve a la pantalla anterior
+  (atrás del navegador; si el sitio no lo deja, abre de nuevo su dirección con la misma sesión),
   la rellena de nuevo (`preparar`) y pulsa otra vez, sin rehacer todo el recorrido. Empieza con `reintentos_paso`
   (2) y aprende por paso entre 1 y `reintentos_paso_max` (5): si entró justo con el último, suma uno; si se agotan
   3 veces seguidas, resta uno. Con citas a la vista usa el tope y no espera. Nunca después de Confirmar.

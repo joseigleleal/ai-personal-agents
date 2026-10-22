@@ -436,17 +436,19 @@ class SitioSimulado(unittest.TestCase):
         self.assertTrue(page.url.endswith("acCitar"))
         self.assertEqual(self.mem.d["selectores"]["acceso_clave"], "input[value*='Cl@ve' i]")
 
-    def pulsar_con_rechazos(self, rechazos: int, cfg=None, vio_citas=False):
-        """Botón de Cl@ve que responde «requested url was rejected» las primeras `rechazos` veces."""
+    def servir_con_rechazos(self, rechazos: int):
+        """El botón de Cl@ve responde «requested url was rejected» las primeras `rechazos` veces."""
         respuestas = ["<html><body>The requested URL was rejected.</body></html>"] * rechazos + [PAGINAS["acCitar"]]
 
         def servir(route):
             pagina = route.request.url.split("/")[-1].split("?")[0]
             cuerpo = respuestas.pop(0) if pagina == "acCitar" and respuestas else PAGINAS.get(pagina, "no existe")
             route.fulfill(content_type="text/html; charset=utf-8", body=cuerpo)
+        return servir
 
+    def pulsar_con_rechazos(self, rechazos: int, cfg=None, vio_citas=False):
         page = self.contexto.new_page()
-        page.route(SITIO + "**", servir)
+        page.route(SITIO + "**", self.servir_con_rechazos(rechazos))
         page.goto(SITIO + "clave")
         flujo = run.Flujo(page, dict(CFG, espera_reintento_paso_s=0, **(cfg or {})), self.mem)
         flujo.vio_citas = vio_citas
@@ -468,6 +470,15 @@ class SitioSimulado(unittest.TestCase):
 
     def test_con_citas_a_la_vista_usa_el_tope(self):
         page = self.pulsar_con_rechazos(4, vio_citas=True)
+        self.assertIn("Oficina 1", page.content())
+
+    def test_si_atras_no_vuelve_abre_la_direccion_anterior(self):
+        page = self.contexto.new_page()
+        with mock.patch.object(page, "go_back", return_value=None):  # como el sitio real tras un 500
+            page.route(SITIO + "**", self.servir_con_rechazos(1))
+            page.goto(SITIO + "clave")
+            run.Flujo(page, dict(CFG, espera_reintento_paso_s=0), self.mem).pulsar(
+                "acceso_clave", "input[value*='Cl@ve' i]")
         self.assertIn("Oficina 1", page.content())
 
     def test_boton_que_no_aparece_recarga_la_pagina(self):
