@@ -69,8 +69,8 @@ DATOS_EXTRA = WORK / "datos_extra.json"  # datos que el formulario pidió y resp
 LOG = DATA_DIR / "cita.log"
 
 NO_CITAS = "no hay citas disponibles"
-BLOCKED = ("requested url was rejected", "too many requests", "demasiadas peticiones",
-           "intrusion prevention")
+# «requested url was rejected» no está: sale muy seguido y nunca fue un bloqueo de verdad (se trata como error del sitio)
+BLOCKED = ("too many requests", "demasiadas peticiones", "intrusion prevention")
 SESION_CADUCADA = "sesión ha caducado"
 # Campos visibles y vacíos de un formulario (radios, casillas y botones aparte): un dato que la config no tiene
 CAMPOS_VACIOS_JS = """els => els.filter(e => e.offsetParent !== null && !e.disabled && !e.readOnly && (e.id || e.name)
@@ -85,7 +85,7 @@ CAMPOS_VACIOS_JS = """els => els.filter(e => e.offsetParent !== null && !e.disab
 NO_PREGUNTAR = re.compile(r"observ|comentario|txtCodigoVerificacion", re.I)  # opcionales, o el SMS (va aparte)
 # Páginas de error del propio sitio: no dicen "no hay citas" y antes se confundían con que sí las había
 ERRORES_SITIO = ("bad gateway", "internal server error", "service unavailable", "gateway timeout",
-                 "request rejected")
+                 "request rejected", "requested url was rejected")
 
 
 class Bloqueado(Exception):
@@ -180,6 +180,7 @@ class Flujo:
         self.page, self.cfg, self.mem, self.n = page, cfg, mem, n
         self.paso = "inicio"         # último paso alcanzado (para el log y la memoria)
         self.confirmando = False     # tras pulsar Confirmar ya no se repite el recorrido
+        self.vio_citas = False       # con citas a la vista los reintentos van todos y sin esperar
 
     def foto(self, nombre: str, guardar_en: Path | None = None) -> None:
         """Captura y HTML de la página: el HTML sirve para ensayar la reserva sin el sitio real.
@@ -224,7 +225,58 @@ class Flujo:
             self.foto("bloqueo", BLOQUEOS)  # la página del bloqueo es la que interesa ver, y se conserva
             raise Bloqueado(f"«{frase}» en {self.page.url}", frase, self.paso)
 
-    def pulsar(self, paso: str, *selectores: str, reintentar: bool = True) -> None:
+    def pulsar(self, paso: str, *selectores: str, reintentar: bool = True, preparar=None) -> None:
+        """Pulsa el botón del paso. Si el sitio responde con una página de error (502, «requested url was
+        rejected»…; un bloqueo no), vuelve a la pantalla anterior y lo pulsa de nuevo, sin rehacer el recorrido.
+        Cuántas veces lo aprende por paso (`Aprendizaje.vueltas`); con citas a la vista usa el tope y no espera.
+        `preparar`: rellena la pantalla antes de cada intento (al volver atrás el formulario puede quedar vacío).
+        Tras Confirmar nunca se repite (podría duplicar la reserva)."""
+        veces = self.mem.vueltas(paso, self.cfg, self.vio_citas) if reintentar and not self.confirmando else 0
+        for vuelta in range(veces + 1):
+            if preparar:
+                preparar()
+            try:
+                self._pulsar(paso, selectores, reintentar)
+                if vuelta:
+                    log(f"Paso «{paso}»: entró al reintento {vuelta}.")
+                    self.mem.resultado_vuelta(paso, vuelta, True, self.cfg)
+                return
+            except ErrorDelSitio as e:
+                if vuelta == veces:
+                    if vuelta:
+                        self.mem.resultado_vuelta(paso, vuelta, False, self.cfg)
+                    raise
+                log(f"«{e}» en «{paso}»: vuelvo a la pantalla anterior y reintento ({vuelta + 1}/{veces}).")
+                self.foto(f"rechazo_{paso}")
+                try:
+                    self.page.go_back(wait_until="domcontentloaded", timeout=self.mem.timeout(paso))
+                except PlaywrightError:
+                    raise e from None
+                if not any(self.hay(s) for s in selectores):  # la pantalla anterior no volvió: recorrido nuevo
+                    self.mem.resultado_vuelta(paso, vuelta + 1, False, self.cfg)
+                    raise e from None
+                if not self.vio_citas:
+                    self.page.wait_for_timeout(self.cfg.get("espera_reintento_paso_s", 5) * 1000)
+
+    def esperar_boton(self, selectores: tuple[str, ...], espera: int) -> None:
+        """Espera el botón; si la página ya cargó entera y a los `recargar_tras_s` (20) sigue sin aparecer,
+        la recarga una vez en vez de esperar hasta 90 s algo que no va a llegar."""
+        recargar = int(self.cfg.get("recargar_tras_s", 20)) * 1000
+        if 0 < recargar < espera:
+            try:
+                self.page.wait_for_selector(", ".join(selectores), timeout=recargar)
+                return
+            except PlaywrightError:
+                if self.page.evaluate("document.readyState") != "complete":
+                    raise
+                log(f"Paso «{self.paso}»: el botón no apareció en {recargar / 1000:.0f} s; recargo la página.")
+                self.page.reload(wait_until="domcontentloaded", timeout=espera)
+                self.revisar_bloqueo()
+                self.error_del_sitio()
+                espera -= recargar
+        self.page.wait_for_selector(", ".join(selectores), timeout=espera)
+
+    def _pulsar(self, paso: str, selectores: tuple[str, ...], reintentar: bool) -> None:
         """Pulsa el primer botón de `selectores` que exista y espera la página siguiente.
 
         La espera sale de la memoria (crece si el paso suele tardar). Si se agota, reintenta una vez
@@ -234,7 +286,7 @@ class Flujo:
         for intento in range(2 if reintentar else 1):
             espera, antes = self.mem.timeout(paso), self.page.url
             try:
-                self.page.wait_for_selector(", ".join(selectores), timeout=espera)
+                self.esperar_boton(selectores, espera)
                 sel = next((s for s in self.mem.orden(paso, selectores) if self.hay(s)), selectores[0])
                 with self.page.expect_navigation(timeout=espera):
                     self.page.click(sel, timeout=espera)
@@ -263,10 +315,37 @@ class Flujo:
         self.paso = "inicio"
         self.page.goto(ICP, wait_until="domcontentloaded", timeout=self.mem.timeout("inicio") * 2)
         self.revisar_bloqueo()
-        self.page.select_option("select#form", label=cfg["provincia"])
-        self.pulsar("provincia", "#btnAceptar")
+        self.pulsar("provincia", "#btnAceptar",
+                    preparar=lambda: self.page.select_option("select#form", label=cfg["provincia"]))
         self.foto("tramite")
+        self.pulsar("tramite", "#btnAceptar", preparar=self.elegir_tramite)
+        self.foto("info")
+        self.pulsar("acceso_clave", "#btnAccesoClave", "input[value*='Cl@ve' i]", "button:has-text('Cl@ve')")
+        self.foto("clave")
+        self.paso = "certificado"
+        boton = self.page.get_by_role("button", name=re.compile("Certificado electr", re.I))
+        boton.first.click(timeout=self.mem.timeout("certificado"))
+        self.paso = "vuelta_clave"
+        fin, recarga = time.time() + 120, time.time() + int(self.cfg.get("recargar_vuelta_clave_s", 40))
+        while "icpplus/ac" not in self.page.url:  # vuelta de Cl@ve; a veces llega con la sesión caducada
+            if "icpplus/infogenerica" in self.page.url and SESION_CADUCADA in self.texto():
+                raise SesionCaducada(self.page.url)
+            if recarga and time.time() > recarga and "procesarrespuestaclave" in self.page.url.lower():
+                log("Vuelta de Cl@ve trabada; recargo la página una vez.")  # se quedaba ahí los 120 s
+                recarga = 0
+                try:
+                    self.page.reload(wait_until="domcontentloaded", timeout=30_000)
+                except PlaywrightError:
+                    pass
+            if time.time() > fin:
+                raise Inesperado(f"No volvió de Cl@ve en 120 s (quedó en {self.page.url})")
+            self.page.wait_for_timeout(1000)
+        self.page.wait_for_load_state("domcontentloaded")
+        self.revisar_bloqueo()
+        self.foto("entrada")
 
+    def elegir_tramite(self) -> None:
+        cfg = self.cfg
         oficina = str(cfg.get("oficina", "99"))
         if self.page.input_value("select#sede") != oficina:  # cambiar la oficina recarga la página
             with self.page.expect_navigation():
@@ -280,25 +359,6 @@ class Flujo:
         if not valor:
             raise Inesperado(f"No encontré el trámite «{cfg['tramite']}» en {cfg['provincia']}")
         self.page.select_option(sel, valor)
-        self.pulsar("tramite", "#btnAceptar")
-        self.foto("info")
-
-        self.pulsar("acceso_clave", "#btnAccesoClave", "input[value*='Cl@ve' i]", "button:has-text('Cl@ve')")
-        self.foto("clave")
-        self.paso = "certificado"
-        boton = self.page.get_by_role("button", name=re.compile("Certificado electr", re.I))
-        boton.first.click(timeout=self.mem.timeout("certificado"))
-        self.paso = "vuelta_clave"
-        fin = time.time() + 120
-        while "icpplus/ac" not in self.page.url:  # vuelta de Cl@ve; a veces llega con la sesión caducada
-            if "icpplus/infogenerica" in self.page.url and SESION_CADUCADA in self.texto():
-                raise SesionCaducada(self.page.url)
-            if time.time() > fin:
-                raise Inesperado(f"No volvió de Cl@ve en 120 s (quedó en {self.page.url})")
-            self.page.wait_for_timeout(1000)
-        self.page.wait_for_load_state("domcontentloaded")
-        self.revisar_bloqueo()
-        self.foto("entrada")
 
     # --- 2. Datos del solicitante y comprobación de disponibilidad ---------------------------
     def hay_citas(self) -> bool:
@@ -310,8 +370,18 @@ class Flujo:
         self.error_del_sitio()
         if not (self.hay("#btnEnviar") or self.hay("#txtIdCitado")):
             raise Inesperado("La página de entrada no es la esperada (no dice si hay citas)")
-        cfg = self.cfg
         self.paso = "datos"
+        if self.hay("#btnEnviar"):
+            self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante)
+            self.foto("validar")
+        if NO_CITAS in self.texto():
+            return False
+        self.error_del_sitio()
+        self.vio_citas = True
+        return True
+
+    def datos_solicitante(self) -> None:
+        cfg = self.cfg
         copiar = self.page.get_by_role("button", name=re.compile("Copiar a datos solicitante", re.I))
         if copiar.count():  # con Cl@ve: pasa NIE y nombre del usuario a los datos del solicitante
             copiar.first.click()
@@ -320,13 +390,6 @@ class Flujo:
         if self.hay("select#txtPaisNac") and cfg.get("pais"):
             self.page.select_option("select#txtPaisNac", label=cfg["pais"].upper())
         self.completar_faltantes()
-        if self.hay("#btnEnviar"):
-            self.pulsar("datos", "#btnEnviar")
-            self.foto("validar")
-        if NO_CITAS in self.texto():
-            return False
-        self.error_del_sitio()
-        return True
 
     def rellenar(self, selector: str, valor: str | None) -> None:
         campo = self.page.locator(selector)
@@ -387,16 +450,18 @@ class Flujo:
             self.pulsar("solicitar", "#btnEnviar")
             self.foto("solicitar")
         if self.hay("select#idSede"):                                          # oficina, si la pide
-            page.select_option("select#idSede", index=0)
-            self.completar_faltantes()
-            self.pulsar("oficina", "#btnSiguiente")
+            def oficina():
+                page.select_option("select#idSede", index=0)
+                self.completar_faltantes()
+            self.pulsar("oficina", "#btnSiguiente", preparar=oficina)
             self.foto("oficina")
         if self.hay("#txtTelefonoCitado"):                                     # contacto
-            self.rellenar("#txtTelefonoCitado", cfg["telefono"])
-            self.rellenar("#emailUNO", cfg["email"])
-            self.rellenar("#emailDOS", cfg["email"])
-            self.completar_faltantes()
-            self.pulsar("contacto", "#btnSiguiente")
+            def contacto():
+                self.rellenar("#txtTelefonoCitado", cfg["telefono"])
+                self.rellenar("#emailUNO", cfg["email"])
+                self.rellenar("#emailDOS", cfg["email"])
+                self.completar_faltantes()
+            self.pulsar("contacto", "#btnSiguiente", preparar=contacto)
             self.foto("contacto")
         if NO_CITAS in self.texto():
             raise Inesperado("Las citas se agotaron mientras reservaba")
@@ -406,8 +471,7 @@ class Flujo:
         if not huecos.count():
             raise Inesperado("No encontré horarios para elegir")
         detalle = self.detalle_hueco(huecos.first)
-        huecos.first.check()
-        self.pulsar("horario", "#btnSiguiente")
+        self.pulsar("horario", "#btnSiguiente", preparar=lambda: huecos.first.check())
         self.foto("verificar")
 
         for casilla in ("#chkTotal", "#enviarCorreo"):
@@ -919,6 +983,7 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
             contexto.clear_cookies()
             page = nueva_pagina(contexto)
             flujo = Flujo(page, cfg, mem, n)
+            flujo.vio_citas = vio_citas
             try:
                 flujo.entrar()
                 if not flujo.hay_citas():

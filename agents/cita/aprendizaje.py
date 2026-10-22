@@ -79,6 +79,34 @@ class Aprendizaje:
         if por_tiempo:
             p["timeout_ms"] = min(MAX_MS, int(p["timeout_ms"] * 1.5))
 
+    # --- Reintentos volviendo a la pantalla anterior -------------------------------------------
+    def vueltas(self, paso: str, cfg: dict | None = None, con_citas: bool = False) -> int:
+        """Cuántas veces volver atrás y pulsar de nuevo ante un error del sitio en este paso. Empieza en
+        `reintentos_paso` (2) y aprende entre 1 y `reintentos_paso_max` (5); con citas a la vista, el tope."""
+        cfg = cfg or {}
+        base, tope = int(cfg.get("reintentos_paso", 2)), int(cfg.get("reintentos_paso_max", 5))
+        if con_citas:
+            return tope
+        return min(tope, int(self.d.get("vueltas", {}).get(paso, {}).get("limite", base)))
+
+    def resultado_vuelta(self, paso: str, usadas: int, entro: bool, cfg: dict | None = None) -> None:
+        """Si entró justo con el último reintento, suma uno (estuvo cerca de no alcanzar). Si se agotaron
+        3 veces seguidas sin entrar, resta uno: insistir más ahí solo cansa al sitio."""
+        cfg = cfg or {}
+        tope = int(cfg.get("reintentos_paso_max", 5))
+        v = self.d.setdefault("vueltas", {}).setdefault(
+            paso, {"limite": int(cfg.get("reintentos_paso", 2)), "entro": 0, "agotadas": 0, "seguidas": 0})
+        if entro:
+            v["entro"] += 1
+            v["seguidas"] = 0
+            if usadas >= v["limite"]:
+                v["limite"] = min(tope, v["limite"] + 1)
+        else:
+            v["agotadas"] += 1
+            v["seguidas"] += 1
+            if v["seguidas"] >= SEGUIDOS_PAUSA:
+                v["limite"], v["seguidas"] = max(1, v["limite"] - 1), 0
+
     def orden(self, paso: str, selectores: tuple[str, ...]) -> list[str]:
         """Selectores del botón, con el que funcionó la última vez primero."""
         bueno = self.d["selectores"].get(paso)
@@ -332,6 +360,9 @@ class Aprendizaje:
             if p["fallos"]:
                 lineas.append(f"  {paso}: ok {p['ok']}, fallos {p['fallos']}, espera {p['timeout_ms'] / 1000:.0f} s"
                               f" — último: {p.get('ultimo_error', '')}")
+        for paso, v in sorted(self.d.get("vueltas", {}).items()):
+            lineas.append(f"  {paso}: vuelve atrás hasta {v['limite']} veces ante un error del sitio "
+                          f"(entró {v['entro']}, se agotaron {v['agotadas']})")
         vistas = [r["t"] for r in revs if r["r"] == "hay_citas"]
         lineas.append("Citas vistas: " + (", ".join(vistas[-10:]) if vistas else "ninguna todavía"))
         intensas = sorted(self.horas_intensas((cfg or {}).get("horas_intensas") or ()))

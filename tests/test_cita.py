@@ -436,6 +436,67 @@ class SitioSimulado(unittest.TestCase):
         self.assertTrue(page.url.endswith("acCitar"))
         self.assertEqual(self.mem.d["selectores"]["acceso_clave"], "input[value*='Cl@ve' i]")
 
+    def pulsar_con_rechazos(self, rechazos: int, cfg=None, vio_citas=False):
+        """Botón de Cl@ve que responde «requested url was rejected» las primeras `rechazos` veces."""
+        respuestas = ["<html><body>The requested URL was rejected.</body></html>"] * rechazos + [PAGINAS["acCitar"]]
+
+        def servir(route):
+            pagina = route.request.url.split("/")[-1].split("?")[0]
+            cuerpo = respuestas.pop(0) if pagina == "acCitar" and respuestas else PAGINAS.get(pagina, "no existe")
+            route.fulfill(content_type="text/html; charset=utf-8", body=cuerpo)
+
+        page = self.contexto.new_page()
+        page.route(SITIO + "**", servir)
+        page.goto(SITIO + "clave")
+        flujo = run.Flujo(page, dict(CFG, espera_reintento_paso_s=0, **(cfg or {})), self.mem)
+        flujo.vio_citas = vio_citas
+        flujo.pulsar("acceso_clave", "#btnAccesoClave", "input[value*='Cl@ve' i]")
+        return page
+
+    def test_error_del_sitio_vuelve_atras_y_reintenta(self):
+        page = self.pulsar_con_rechazos(2)  # dos rechazos y al tercer intento entra
+        self.assertIn("Oficina 1", page.content())
+        # entró con el último reintento permitido: aprende a dar uno más
+        self.assertEqual(self.mem.vueltas("acceso_clave", CFG), 3)
+
+    def test_reintentos_agotados_terminan_en_error_y_aprende_a_insistir_menos(self):
+        for _ in range(3):
+            with self.assertRaises(run.ErrorDelSitio):
+                self.pulsar_con_rechazos(9)
+        self.assertEqual(self.mem.vueltas("acceso_clave", CFG), 1)
+        self.assertEqual(self.mem.vueltas("acceso_clave", CFG, con_citas=True), 5)  # con citas, el tope
+
+    def test_con_citas_a_la_vista_usa_el_tope(self):
+        page = self.pulsar_con_rechazos(4, vio_citas=True)
+        self.assertIn("Oficina 1", page.content())
+
+    def test_boton_que_no_aparece_recarga_la_pagina(self):
+        cargas = []
+
+        def servir(route):
+            pagina = route.request.url.split("/")[-1].split("?")[0]
+            if pagina == "info":
+                cargas.append(1)  # la primera carga viene sin botón; la segunda, bien
+                cuerpo = "<html><body>cargando…</body></html>" if len(cargas) == 1 else PAGINAS["clave"]
+            else:
+                cuerpo = PAGINAS.get(pagina, "no existe")
+            route.fulfill(content_type="text/html; charset=utf-8", body=cuerpo)
+
+        self.mem.d["pasos"]["acceso_clave"] = {"ok": 0, "fallos": 0, "timeout_ms": 5000}
+        page = self.contexto.new_page()
+        page.route(SITIO + "**", servir)
+        page.goto(SITIO + "info")
+        run.Flujo(page, dict(CFG, recargar_tras_s=1), self.mem).pulsar("acceso_clave", "input[value*='Cl@ve' i]")
+        self.assertEqual(len(cargas), 2)
+        self.assertTrue(page.url.endswith("acCitar"))
+
+    def test_too_many_requests_sigue_siendo_bloqueo(self):
+        page = self.contexto.new_page()
+        with mock.patch.dict(PAGINAS, {"acCitar": "<html><body>Too Many Requests</body></html>"}):
+            page.goto(SITIO + "clave")
+            with self.assertRaises(run.Bloqueado):
+                run.Flujo(page, CFG, self.mem).pulsar("acceso_clave", "input[value*='Cl@ve' i]")
+
     def test_no_repite_tras_confirmar(self):
         def entrar(flujo):
             flujo.page.goto(SITIO + "acEntrada")

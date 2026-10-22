@@ -28,6 +28,11 @@ resumen_diario_hora: 21         # resumen de las últimas 24 h, una vez al día 
 horas_intensas: []              # opcional, ej. [8, 9, 14]: al doble de ritmo (además de las aprendidas)
 reintentos: 2                   # si un recorrido falla antes de Confirmar, se repite hasta N veces
 espera_reintento_s: 15          # espera antes del 1.er reintento (se duplica); con citas a la vista, 0
+reintentos_paso: 2              # si un botón da página de error del sitio, vuelve atrás y lo pulsa de nuevo (aprende 1-máx)
+reintentos_paso_max: 5          # tope de lo aprendido; con citas a la vista usa este y sin esperar
+espera_reintento_paso_s: 5      # espera antes de volver a pulsarlo
+recargar_tras_s: 20             # si la página cargó y el botón no aparece en N s, recarga una vez (0 = no)
+recargar_vuelta_clave_s: 40     # trabado volviendo de Cl@ve N s: recarga una vez (0 = no)
 espera_dato_min: 4              # si el formulario pide un dato que no está aquí, te lo pregunta por Telegram y espera esto
 historial_dias: 14              # capturas de cada revisión en data/cita/historial/ (se piden con /ver por Telegram)
 
