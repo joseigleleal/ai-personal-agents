@@ -85,7 +85,7 @@ CAMPOS_VACIOS_JS = """els => els.filter(e => e.offsetParent !== null && !e.disab
 NO_PREGUNTAR = re.compile(r"observ|comentario|txtCodigoVerificacion", re.I)  # opcionales, o el SMS (va aparte)
 # Páginas de error del propio sitio: no dicen "no hay citas" y antes se confundían con que sí las había
 ERRORES_SITIO = ("bad gateway", "internal server error", "service unavailable", "gateway timeout",
-                 "request rejected", "requested url was rejected")
+                 "request rejected", "requested url was rejected", "se ha producido un error en el sistema")
 
 
 class Bloqueado(Exception):
@@ -256,19 +256,20 @@ class Flujo:
                     self.page.wait_for_timeout(self.cfg.get("espera_reintento_paso_s", 5) * 1000)
 
     def volver(self, selectores: tuple[str, ...]) -> bool:
-        """Vuelve a la pantalla del botón: «atrás» del navegador y, si el sitio no lo deja (pasó con un 500 en
-        provincia: la página no cambió), abre de nuevo su dirección con la misma sesión."""
+        """Vuelve a la pantalla del botón: «atrás» del navegador y, si no, abre de nuevo su dirección con la misma
+        sesión. El sitio primero muestra su verificación anti-robots (JavaScript de F5) y recién después la
+        pantalla: hay que esperar el botón, no buscarlo al instante (así se perdía la vuelta)."""
+        espera = min(self.mem.timeout(self.paso), int(self.cfg.get("espera_volver_s", 20)) * 1000)
         for ir in (lambda: self.page.go_back(wait_until="domcontentloaded", timeout=self.mem.timeout(self.paso)),
                    lambda: self.page.goto(self.url_previa, wait_until="domcontentloaded",
                                           timeout=self.mem.timeout(self.paso))):
             try:
                 ir()
-            except PlaywrightError:
-                continue
-            if any(self.hay(s) for s in selectores):
+                self.page.wait_for_selector(", ".join(selectores), timeout=espera)
                 return True
-            if not self.url_previa:
-                break
+            except PlaywrightError:
+                if not self.url_previa:
+                    break
         return False
 
     def esperar_boton(self, selectores: tuple[str, ...], espera: int) -> None:

@@ -467,6 +467,12 @@ class SitioSimulado(unittest.TestCase):
                 self.pulsar_con_rechazos(9)
         self.assertEqual(self.mem.vueltas("acceso_clave", CFG), 1)
         self.assertEqual(self.mem.vueltas("acceso_clave", CFG, con_citas=True), 5)  # con citas, el tope
+        for _ in range(3):
+            with self.assertRaises(run.ErrorDelSitio):
+                self.pulsar_con_rechazos(9)
+        self.assertEqual(self.mem.vueltas("acceso_clave", CFG), 0)  # ya no vuelve atrás: recorrido nuevo
+        with self.assertRaises(run.ErrorDelSitio):
+            self.pulsar_con_rechazos(1)
 
     def test_con_citas_a_la_vista_usa_el_tope(self):
         page = self.pulsar_con_rechazos(4, vio_citas=True)

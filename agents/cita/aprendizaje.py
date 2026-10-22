@@ -82,7 +82,7 @@ class Aprendizaje:
     # --- Reintentos volviendo a la pantalla anterior -------------------------------------------
     def vueltas(self, paso: str, cfg: dict | None = None, con_citas: bool = False) -> int:
         """Cuántas veces volver atrás y pulsar de nuevo ante un error del sitio en este paso. Empieza en
-        `reintentos_paso` (2) y aprende entre 1 y `reintentos_paso_max` (5); con citas a la vista, el tope."""
+        `reintentos_paso` (2) y aprende entre 0 y `reintentos_paso_max` (5); con citas a la vista, el tope."""
         cfg = cfg or {}
         base, tope = int(cfg.get("reintentos_paso", 2)), int(cfg.get("reintentos_paso_max", 5))
         if con_citas:
@@ -91,7 +91,8 @@ class Aprendizaje:
 
     def resultado_vuelta(self, paso: str, usadas: int, entro: bool, cfg: dict | None = None) -> None:
         """Si entró justo con el último reintento, suma uno (estuvo cerca de no alcanzar). Si se agotaron
-        3 veces seguidas sin entrar, resta uno: insistir más ahí solo cansa al sitio."""
+        3 veces seguidas sin entrar, resta uno, hasta 0: en pasos donde el sitio no acepta el reenvío (pasa en
+        «tramite»: responde «error en el sistema») deja de volver atrás y rehace el recorrido directamente."""
         cfg = cfg or {}
         tope = int(cfg.get("reintentos_paso_max", 5))
         v = self.d.setdefault("vueltas", {}).setdefault(
@@ -105,7 +106,7 @@ class Aprendizaje:
             v["agotadas"] += 1
             v["seguidas"] += 1
             if v["seguidas"] >= SEGUIDOS_PAUSA:
-                v["limite"], v["seguidas"] = max(1, v["limite"] - 1), 0
+                v["limite"], v["seguidas"] = max(0, v["limite"] - 1), 0
 
     def orden(self, paso: str, selectores: tuple[str, ...]) -> list[str]:
         """Selectores del botón, con el que funcionó la última vez primero."""

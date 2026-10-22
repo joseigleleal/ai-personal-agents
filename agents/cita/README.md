@@ -114,8 +114,9 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 - Error del sitio en un botón (502, 500, «requested url was rejected»): `pulsar` vuelve a la pantalla anterior
   (atrás del navegador; si el sitio no lo deja, abre de nuevo su dirección con la misma sesión),
   la rellena de nuevo (`preparar`) y pulsa otra vez, sin rehacer todo el recorrido. Empieza con `reintentos_paso`
-  (2) y aprende por paso entre 1 y `reintentos_paso_max` (5): si entró justo con el último, suma uno; si se agotan
-  3 veces seguidas, resta uno. Con citas a la vista usa el tope y no espera. Nunca después de Confirmar.
+  (2) y aprende por paso entre 0 y `reintentos_paso_max` (5): si entró justo con el último, suma uno; si se agotan
+  3 veces seguidas, resta uno (en «tramite» el sitio no acepta el reenvío: llega a 0 y rehace el recorrido).
+  Al volver espera el botón hasta `espera_volver_s` (20): antes aparece la verificación anti-robots del sitio. Con citas a la vista usa el tope y no espera. Nunca después de Confirmar.
 - «requested url was rejected» ya no cuenta como bloqueo (salía muy seguido y nunca lo fue); bloqueo es «too many
   requests». Si el botón no aparece en `recargar_tras_s` (20) con la página cargada, la recarga una vez; si la vuelta
   de Cl@ve se traba `recargar_vuelta_clave_s` (40) en `procesarRespuestaClave`, también.
