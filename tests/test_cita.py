@@ -45,14 +45,16 @@ PAGINAS = {
         <input id='emailUNO' name='emailUNO'><input id='emailDOS' name='emailDOS'>"""),
     "acOfertarCita": form("acVerificarCita", """
         <div><input type='radio' id='cita1' name='rdbCita' value='1'> CITA 1 Día: 20/11/2026 Hora: 09:30</div>
-        <div><input type='radio' id='cita2' name='rdbCita' value='2'> CITA 2 Día: 21/11/2026 Hora: 10:00</div>"""),
+        <div><input type='radio' id='cita2' name='rdbCita' value='2'> CITA 2 Día: 21/11/2026 Hora: 10:00</div>
+        <label for='captcha'>Por favor, valida el Captcha para poder continuar</label>
+        <img id='c_cita_CaptchaImage' src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='80' height='30'>
+        <input id='captcha' name='captcha'>"""),
     "acVerificarCita": form("acGrabarCita", """
         <input type='checkbox' id='chkTotal' name='chkTotal'>
         <input type='checkbox' id='enviarCorreo' name='enviarCorreo'>
-        <img id='imgCaptcha' src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='80' height='30'>
-        <label for='txtCaptcha'>Introduzca los caracteres de la imagen</label>
-        <input id='txtCaptcha' name='txtCaptcha'>""", "btnConfirmar"),
-    "acGrabarCita": "<html><body><p>Su cita ha sido CONFIRMADA.</p><p>Número de justificante: ABC123456</p></body></html>",
+""", "btnConfirmar"),
+    "acGrabarCita": "<html><body><p>CITA CONFIRMADA</p><div>Nº de Justificante de cita:<br><b>ABC123456</b></div>"
+                    "</body></html>",
     # Botón que aparece tarde y botón de Cl@ve sin el id conocido
     "lento": "<html><body><form method='post' action='acCitar'></form><script>setTimeout(() => "
              "document.forms[0].insertAdjacentHTML('beforeend', \"<input type=submit id=btnSiguiente>\"), 1200)"
@@ -65,7 +67,7 @@ SIN_CITAS = ("<html><body><p>En este momento no hay citas disponibles.</p><form 
              "<input type='button' id='btnSubmit' value='Aceptar'></form></body></html>")
 
 CFG = {"provincia": "Prueba", "pais": "Peru", "telefono": "600000000", "email": "prueba@example.com",
-       "reintentos": 2, "espera_reintento_s": 0, "pausa_reconsulta_s": 0}
+       "reintentos": 2, "espera_reintento_s": 0}
 
 
 class Memoria(unittest.TestCase):
@@ -307,7 +309,7 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(self.enviados["acOfertarCita"]["txtTelefonoCitado"], ["600000000"])
         self.assertEqual(self.enviados["acOfertarCita"]["emailDOS"], ["prueba@example.com"])
         self.assertEqual(self.enviados["acVerificarCita"]["rdbCita"], ["1"])
-        self.assertEqual(self.enviados["acGrabarCita"]["txtCaptcha"], ["123456"])
+        self.assertEqual(self.enviados["acVerificarCita"]["captcha"], ["123456"])  # captcha junto a los horarios
         self.assertIn("lo que ves en la imagen", self.avisar_con_foto.call_args_list[1].args[0])
         self.assertIn("20/11/2026", self.avisar_con_foto.call_args_list[1].args[0])
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["hay_citas", "reservada"])
@@ -352,39 +354,24 @@ class SitioSimulado(unittest.TestCase):
         self.avisar_con_foto.assert_not_called()
         self.assertIn("página de error «bad gateway»", run.explicar_error(e.exception))
 
-    def test_sin_citas_reconsulta_sin_rehacer_clave(self):
-        """Visto en vivo: con «no hay citas» el sitio devuelve el formulario; Copiar + país + Aceptar consulta otra
-        vez y ahí apareció la cita."""
-        entradas = []
-
+    def test_entrada_sin_citas_consulta_otra_vez(self):
+        """Visto en vivo: la entrada dice «no hay citas», pero Copiar + país + Aceptar consulta de nuevo."""
         def entrar(flujo):
-            entradas.append(1)
             flujo.page.goto(SITIO + "acEntrada")
 
-        respuestas = iter([SIN_CITAS, SIN_CITAS, PAGINAS["acValidarEntrada"]])
-        servir = self.servir
-
-        def servir_validar(route):
-            if route.request.url.endswith("acValidarEntrada"):
-                self.enviados.setdefault("consultas", []).append(parse_qs(route.request.post_data)["txtPaisNac"])
-                return route.fulfill(content_type="text/html; charset=utf-8", body=next(respuestas))
-            servir(route)
-
-        self.contexto.unroute(SITIO + "**")
-        self.contexto.route(SITIO + "**", servir_validar)
-        with mock.patch.object(run.Flujo, "entrar", entrar):
+        entrada = PAGINAS["acEntrada"].replace("<form", "<p>En este momento no hay citas disponibles.</p><form")
+        with mock.patch.object(run.Flujo, "entrar", entrar), mock.patch.dict(PAGINAS, {"acEntrada": entrada}):
             run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
-        self.assertEqual(len(entradas), 1)
-        self.assertEqual(self.enviados["consultas"], [["2"]] * 3)  # el país va en cada consulta
+        self.assertEqual(self.enviados["acValidarEntrada"]["txtPaisNac"], ["2"])
         self.assertIn("ABC123456", run.DONE.read_text())
 
-    def test_sin_citas_tras_todas_las_consultas(self):
+    def test_sin_citas_tras_aceptar(self):
         def entrar(flujo):
             flujo.page.goto(SITIO + "acEntrada")
 
         with mock.patch.object(run.Flujo, "entrar", entrar), \
                 mock.patch.dict(PAGINAS, {"acValidarEntrada": SIN_CITAS}):
-            run.recorrido(self.contexto, {**CFG, "reconsultas": 1}, self.mem, solo_revisar=False)
+            run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
         self.assertFalse(run.DONE.exists())
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["sin_citas"])
         self.avisar_con_foto.assert_not_called()

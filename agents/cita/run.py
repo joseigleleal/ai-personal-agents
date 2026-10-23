@@ -21,7 +21,6 @@ import base64
 import hashlib
 import json
 import os
-import random
 import re
 import shutil
 import socket
@@ -385,64 +384,26 @@ class Flujo:
     def hay_citas(self) -> bool:
         """Solo dice que hay citas si ve el menú con «Solicitar Cita». Antes bastaba con no ver el aviso
         "no hay citas", y un 502 o una sesión caducada pasaban por citas disponibles.
-        La entrada suele llegar ya con el aviso "no hay citas" y el formulario: Copiar + país + Aceptar consulta de
-        nuevo (así apareció una cita en vivo). Si esa también dice "no hay citas", vuelve atrás al formulario y
-        consulta otra vez, hasta `reconsultas` veces más. Lo que falle desde la 2.ª consulta no rehace el recorrido:
-        las consultas anteriores ya dijeron "sin citas"."""
-        consultas = 1 + int(self.cfg.get("reconsultas", 2))
-        self.url_formulario = self.page.url
-        for consulta in range(consultas + 1):
-            self.paso = "entrada" if consulta == 0 else "datos"
-            try:
-                self.revisar_pagina()
-            except (ErrorDelSitio, SesionCaducada) as e:
-                if consulta < 2:
-                    raise
-                log(f"La consulta {consulta} dio «{e}»; me quedo con las anteriores (sin citas).")
-                return False
-            if self.menu_citas():
-                self.vio_citas = True
-                return True
+        La entrada suele llegar ya con el aviso "no hay citas" sobre el formulario, pero Copiar + país + Aceptar
+        consulta de nuevo (así apareció una cita en vivo): se hace siempre. Una tercera consulta no se puede: la
+        respuesta sin citas no trae el formulario, y ni «atrás» ni abrir de nuevo su dirección lo devuelven."""
+        self.paso = "entrada"
+        self.revisar_pagina()
+        if not self.menu_citas():
             if not self.hay("#txtIdCitado"):
-                if NO_CITAS not in self.texto():
-                    raise Inesperado("La página no es la esperada (no dice si hay citas)")
-                if consulta == 0 or consulta == consultas or not self.volver_al_formulario():
+                if NO_CITAS in self.texto():
                     return False
-            if consulta == consultas:
-                return False
-            if consulta:
-                pausa = int(self.cfg.get("pausa_reconsulta_s", 20))
-                log(f"Sin citas (consulta {consulta}/{consultas}); copio los datos y consulto de nuevo "
-                    f"en {pausa} s.")
-                self.page.wait_for_timeout(pausa * 1000 * random.uniform(0.8, 1.2))
+                raise Inesperado("La página de entrada no es la esperada (no dice si hay citas)")
             self.paso = "datos"
-            try:  # la 1.ª consulta reintenta como cualquier paso; las siguientes, si fallan, se dejan
-                self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante, reintentar=not consulta)
-            except (ErrorDelSitio, PlaywrightError) as e:
-                if not consulta:
-                    raise
-                log(f"La consulta {consulta + 1} dio «{str(e).splitlines()[0][:100]}»; me quedo con las "
-                    "anteriores (sin citas).")
-                return False
+            self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante)
             self.foto("validar")
-        return False
-
-    def volver_al_formulario(self) -> bool:
-        """Tras Aceptar, "no hay citas" llega en una página cuyo único botón lleva al inicio (habría que rehacer
-        Cl@ve). Para consultar otra vez, en la misma sesión: atrás del navegador y, si no vuelve (en vivo se quedó
-        en acValidarEntrada), abre de nuevo la dirección del formulario."""
-        espera = int(self.cfg.get("espera_volver_s", 20)) * 1000
-        for ir in (lambda: self.page.go_back(wait_until="domcontentloaded", timeout=20_000),
-                   lambda: self.page.goto(self.url_formulario, wait_until="domcontentloaded", timeout=30_000)):
-            try:
-                if ir() is None and "acvalidarentrada" in self.page.url.lower():
-                    continue  # «atrás» no se movió: no vale la pena esperar el formulario
-                self.page.locator("#txtIdCitado").wait_for(timeout=espera)
-                return True
-            except PlaywrightError:
-                continue
-        log(f"No pude volver al formulario para consultar otra vez (quedé en {self.page.url}).")
-        return False
+            self.revisar_pagina()
+            if not self.menu_citas():
+                if NO_CITAS in self.texto():
+                    return False
+                raise Inesperado("Tras Aceptar la página no dice si hay citas")
+        self.vio_citas = True
+        return True
 
     def menu_citas(self) -> bool:
         """Pantalla tras Aceptar cuando hay citas: «Solicitar Cita», «Anular Cita»… sin el formulario."""
@@ -502,13 +463,13 @@ class Flujo:
                 self.page.fill(c["sel"], valor)
 
     def pedir_captcha(self, campos: list[dict]) -> None:
-        """Si la pantalla pide escribir un captcha (o un código), te manda la imagen por Telegram con sonido y
-        escribe lo que respondas. Si la página se recarga y vuelve a pedirlo, se pregunta otra vez."""
+        """Si la pantalla pide escribir un captcha (está junto a los horarios: «Por favor, valida el Captcha»), te
+        manda la imagen por Telegram con sonido y escribe lo que respondas, tal cual (distingue minúsculas). Si la página se recarga y vuelve a pedirlo, se pregunta otra vez."""
         campo = next((c for c in campos if not c["lista"] and CODIGO.search(c["sel"] + " " + c["etiqueta"])), None)
         if not campo:
             return
         paso, self.paso = self.paso, "captcha"
-        minutos = int(self.cfg.get("espera_captcha_min", 4))
+        minutos = int(self.cfg.get("espera_captcha_min", 3))  # el sitio da 5 min para confirmar
         self.foto("captcha")
         foto = None
         imagen = self.page.locator(IMAGEN_CAPTCHA)
@@ -579,18 +540,24 @@ class Flujo:
             raise Inesperado("Las citas se agotaron mientras reservaba")
 
         self.paso = "horario"
+        # «Selecciona una de las siguientes citas disponibles»: 1 a 3 (o más); la de arriba es la más próxima
         huecos = page.locator("input[type=radio][id^=cita], input[type=radio][name^=rdbCita]")
+        if not huecos.count():
+            huecos = page.locator("input[type=radio]")
         if not huecos.count():
             self.revisar_pagina()
             raise Inesperado("No encontré horarios para elegir")
         detalle = self.detalle = self.detalle_hueco(huecos.first)
-        self.pulsar("horario", "#btnSiguiente", preparar=lambda: huecos.first.check())
+        def horario():  # en esta misma pantalla está el captcha (y 5 min para confirmar)
+            huecos.first.check()
+            self.completar_faltantes()
+        self.pulsar("horario", "#btnSiguiente", preparar=horario)
         self.foto("verificar")
 
         for casilla in ("#chkTotal", "#enviarCorreo"):
             if self.hay(casilla):
                 page.check(casilla)
-        self.completar_faltantes()  # aquí el sitio pide el captcha: te lo manda por Telegram
+        self.completar_faltantes()
         self.confirmando = True  # desde aquí no se repite nada: podría duplicar la reserva
         self.pulsar("confirmar", "#btnConfirmar", reintentar=False)
         self.foto("confirmada")
@@ -598,7 +565,7 @@ class Flujo:
         texto = page.inner_text("body")
         if "confirmada" not in texto.lower():
             raise Inesperado("Pulsé Confirmar pero no veo la cita confirmada")
-        justificante = re.search(r"justificante[^\n]*?([A-Z0-9]{6,})", texto, re.I)
+        justificante = re.search(r"justificante[^:\n]*:?\s*([A-Z0-9]{6,})", texto, re.I)
         return detalle + (f"\nJustificante: {justificante.group(1)}" if justificante else "")
 
     def detalle_hueco(self, radio) -> str:

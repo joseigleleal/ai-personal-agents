@@ -18,11 +18,12 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentación con Cl@ve"
     ──▶ pasarela Cl@ve ──▶ "DNIe / Certificado electrónico" (el agente entrega el .p12)
     ──▶ acEntrada (suele llegar ya con "no hay citas"): "Copiar a datos solicitante" + país ─▶ Aceptar
-          ¿"no hay citas disponibles"? ─▶ atrás al formulario ─▶ Copiar + país + Aceptar otra vez (hasta `reconsultas`)
-                todas sin citas ─▶ estado "sin citas" y termina
+          ¿"no hay citas disponibles"? ─▶ estado "sin citas" y termina
           ¿página de error (502, 500…), sesión caducada o desconocida? ─▶ error: repite el recorrido
           menú con "Solicitar Cita" ─▶ 🚨 aviso con la captura ─▶ Solicitar cita
-                ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram) ─▶ primer horario ─▶ captcha por Telegram ─▶ Confirmar
+                ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram)
+                ─▶ lista de citas (1 a 3) + captcha: elige la primera (la más próxima) y te manda el captcha por Telegram
+                ─▶ resumen con casillas "conforme" y "recibir por correo" ─▶ Confirmar
                 ─▶ ✅ aviso con fecha/hora y justificante ─▶ crea data/cita/RESERVADA y deja de buscar
 ```
 
@@ -73,15 +74,13 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 6. `recorrido` → `Flujo.entrar`: inicio → provincia → oficina y trámite → botón Cl@ve → "Certificado electrónico"
    → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
 7. `Flujo.hay_citas`: rellena el formulario (`datos_solicitante`: Copiar + país, que Copiar no trae) y pulsa
-   Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). La respuesta sin citas
-   es una página de información cuyo único botón lleva al inicio, así que `volver_al_formulario` va atrás (y si el
-   sitio no se mueve, abre de nuevo la dirección del formulario) y repite
-   Copiar + país + Aceptar hasta `reconsultas` veces, con `pausa_reconsulta_s` entre una y otra, sin rehacer
-   Cl@ve. Si una consulta extra falla (error, sesión caducada), se queda con "sin citas" y no rehace el recorrido. Solo hay citas si aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
+   Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). Solo hay citas si
+   aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
    `ErrorDelSitio`, sesión caducada → `SesionCaducada`, otra página → `Inesperado`. Con citas: 🚨 con captura
    (`avisar_con_foto`, en un hilo aparte) y sigue.
-8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina → contacto → primer horario → captcha
-   (`pedir_captcha`, hasta `espera_captcha_min`) → Confirmar. Antes de cada envío, `completar_faltantes` busca
+8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina (si la pide) → contacto → lista de citas: marca
+   la primera y, en la misma pantalla, el captcha (`pedir_captcha`, hasta `espera_captcha_min`) → casillas →
+   Confirmar. Antes de cada envío, `completar_faltantes` busca
    campos vacíos y pregunta por Telegram los que no conoce. Si ve "confirmada", crea `RESERVADA` y avisa ✅.
 9. Si algo falla: `revisar_bloqueo` (frases de `BLOCKED`) lanza `Bloqueado` → pausa y aviso ⛔. Otro error →
    `recorrido` repite todo con cookies limpias hasta `reintentos`, salvo que ya se haya pulsado Confirmar o
@@ -126,8 +125,8 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 - «requested url was rejected» ya no cuenta como bloqueo (salía muy seguido y nunca lo fue); bloqueo es «too many
   requests». Si el botón no aparece en `recargar_tras_s` (20) con la página cargada, la recarga una vez; si la vuelta
   de Cl@ve se traba `recargar_vuelta_clave_s` (40) en `procesarRespuestaClave`, también.
-- Datos que faltan: `espera_dato_min` (4); captcha: `espera_captcha_min` (4). Aviso ⏳: `aviso_sin_citas_min` (30).
-- Consultas por revisión: 1 + `reconsultas` (2), con `pausa_reconsulta_s` (20, ±20 %) entre ellas.
+- Datos que faltan: `espera_dato_min` (4); captcha: `espera_captcha_min` (3; el sitio da 5 min para confirmar).
+  Aviso ⏳: `aviso_sin_citas_min` (30).
 
 **Para replicarlo**
 
@@ -248,18 +247,18 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   llegar suma lo que dura la revisión (~1,4 min) y la espera del timer. Los mensajes muestran el ciclo medido
   (`Aprendizaje.ciclo_real`, mediana entre inicios). No se acortó la espera para igualarlo: el piso se aprendió con
   ese ciclo y acortarlo traería bloqueos. En el servidor el timer mira cada 20 s para no sumar demora inútil.
-- **Reconsultar sin rehacer Cl@ve.** La entrada suele llegar con el aviso "no hay citas" sobre el formulario;
-  antes el agente se rendía ahí, pero pulsar Copiar, elegir el país y Aceptar es una consulta nueva (así salió una
-  cita en una prueba a mano). La respuesta sin citas no trae el formulario (su botón lleva al inicio), así que
-  para las consultas extra vuelve atrás del navegador. Entrar con
-  Cl@ve es el paso más lento y el que más falla, así que cada revisión aprovecha la sesión para `reconsultas`
-  consultas más. La pausa entre ellas evita parecer un robot; si el sitio bloquea, bajar `reconsultas`.
+- **"No hay citas" en la entrada no es la última palabra.** La entrada suele llegar con ese aviso sobre el
+  formulario; antes el agente se rendía ahí, pero pulsar Copiar, elegir el país y Aceptar es una consulta nueva
+  (así salió una cita en una prueba a mano). Se probó una tercera consulta en la misma sesión y no se puede: la
+  respuesta sin citas no trae el formulario (su botón lleva al inicio), y ni «atrás» ni abrir de nuevo su
+  dirección lo devuelven.
 - **Solo hay citas si se ve "Solicitar Cita".** Antes bastaba con no ver "no hay citas", y una página de
   "sesión caducada" pasó por citas disponibles (aviso 🚨 falso). Ahora hace falta el menú real.
-- **Captcha por Telegram.** Antes de Confirmar el sitio pide escribir las letras de una imagen (no manda SMS).
-  El agente busca el campo (captcha, código, caracteres…), recorta la imagen y te la manda con sonido junto con
-  el horario elegido; espera `espera_captcha_min` a que respondas **en el chat del bot del agente** con el texto
-  (letras y números, sin espacios). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
+- **Captcha por Telegram.** En la pantalla de la lista de citas («Selecciona una de las siguientes citas
+  disponibles», con «dispones de 5 minutos») el sitio pide escribir las letras de una imagen; no manda SMS.
+  El agente marca la primera cita (la más próxima), busca el campo (captcha, código, caracteres…), recorta la
+  imagen y te la manda con sonido junto con el horario; espera `espera_captcha_min` a que respondas **en el chat
+  del bot del agente** con el texto tal cual (letras y números, sin espacios; distingue minúsculas). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
   confirma. No se guarda: cambia cada vez. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
   hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
 - **Datos que faltan, por Telegram.** Antes de enviar cada formulario (datos del solicitante, oficina, contacto,
@@ -381,8 +380,8 @@ ssh oracle 'last -n 10'                                                 # últim
   acepta hay varios bloqueos (cada uno cuesta una pausa), y al bajar el piso vuelve a probar. Si eso
   molesta, subir `ritmo.sube_bloqueo` (escalones más grandes), `ritmo.horas_baja_piso` o `ritmo.minimo_s`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).
-- El campo y la imagen del captcha se buscan por nombres probables (captcha, código, caracteres…): aún no se
-  verificaron con la página real. Si no los encuentra, el campo queda vacío y el aviso de error lo dice.
+- El campo y la imagen del captcha se buscan por nombres probables (captcha, código, caracteres…): la pantalla
+  se vio en una captura del celular, pero sus ids reales solo se confirman cuando el agente llegue ahí. Si no los encuentra, el campo queda vacío y el aviso de error lo dice.
 - No adelanta una cita ya reservada: el sitio no deja mover una cita (solo anular y pedir otra) ni tener dos
   citas del mismo trámite con el mismo NIE, y anular primero para buscar otra arriesga quedarse sin ninguna.
   Tras reservar, el agente deja de buscar.

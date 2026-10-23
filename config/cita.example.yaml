@@ -33,9 +33,7 @@ reintentos_paso_max: 5          # tope de lo aprendido; con citas a la vista usa
 espera_reintento_paso_s: 5      # espera antes de volver a pulsarlo
 recargar_tras_s: 20             # si la página cargó y el botón no aparece en N s, recarga una vez (0 = no)
 recargar_vuelta_clave_s: 40     # trabado volviendo de Cl@ve N s: recarga una vez (0 = no)
-reconsultas: 2                  # con "no hay citas": Copiar + país + Aceptar otra vez, sin rehacer Cl@ve (0 = no)
-pausa_reconsulta_s: 20          # espera entre consultas (±20 %)
-espera_captcha_min: 4           # antes de Confirmar te manda el captcha por Telegram y espera tu respuesta
+espera_captcha_min: 3           # junto a los horarios te manda el captcha por Telegram y espera tu respuesta
 espera_dato_min: 4              # si el formulario pide un dato que no está aquí, te lo pregunta por Telegram y espera esto
 historial_dias: 14              # capturas de cada revisión en data/cita/historial/ (se piden con /ver por Telegram)
 
