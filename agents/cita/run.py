@@ -2,7 +2,7 @@
 
 Repite el recorrido de la web de cita previa (provincia → trámite → Cl@ve con certificado) y, si hay
 citas, reserva la primera disponible con los datos de config/cita.yaml. Avisa por Telegram en cada
-hito: hay citas, pide código SMS, cita reservada o algo falló. Tras reservar, deja de buscar.
+hito: hay citas, pide el captcha, cita reservada o algo falló. Tras reservar, deja de buscar.
 Si un paso falla, lo reintenta con más tiempo y, si sigue fallando, repite el recorrido completo.
 Lo que aprende de cada revisión queda en data/cita/aprendizaje.json (ver aprendizaje.py).
 
@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -65,6 +66,7 @@ NO_ENVIADOS = WORK / "no_enviados.json"  # avisos que Telegram no entregó: se r
 MAX_NO_ENVIADOS = 20
 HISTORIAL = WORK / "historial"     # capturas de cada revisión, por día (se borran tras `historial_dias`)
 AVISO_FOTO = WORK / "aviso.png"    # copia de la captura que se está enviando (la de VISTA cambia en cada paso)
+CAPTCHA = WORK / "captcha.png"     # recorte de la imagen del captcha que se te envía
 DATOS_EXTRA = WORK / "datos_extra.json"  # datos que el formulario pidió y respondiste por Telegram (campo → valor)
 LOG = DATA_DIR / "cita.log"
 
@@ -82,7 +84,11 @@ CAMPOS_VACIOS_JS = """els => els.filter(e => e.offsetParent !== null && !e.disab
                          || e.name || e.id).replace(/\\s+/g, ' ').replace(/[:*]+$/, '').trim(),
               opciones: e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim())
                                                    .filter(t => t && !/selecci|elija|^-+$/i.test(t)) : []}))"""
-NO_PREGUNTAR = re.compile(r"observ|comentario|txtCodigoVerificacion", re.I)  # opcionales, o el SMS (va aparte)
+# Captcha antes de Confirmar (o un código SMS): va aparte, con la imagen, y no se guarda porque cambia cada vez
+CODIGO = re.compile(r"captcha|c[oó]digo|verificaci|seguridad|caracteres", re.I)
+NO_PREGUNTAR = re.compile(r"observ|comentario|" + CODIGO.pattern, re.I)  # opcionales, o el captcha
+IMAGEN_CAPTCHA = ("img[src*='captcha' i], img[id*='captcha' i], img[alt*='captcha' i], img[src*='kaptcha' i], "
+                  "img[src*='imagen' i][src*='codigo' i], canvas[id*='captcha' i]")
 # Páginas de error del propio sitio: no dicen "no hay citas" y antes se confundían con que sí las había
 ERRORES_SITIO = ("bad gateway", "internal server error", "service unavailable", "gateway timeout",
                  "request rejected", "requested url was rejected", "se ha producido un error en el sistema")
@@ -119,11 +125,11 @@ def avisar(text: str, sonido: bool = False) -> None:
         subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
 
 
-def avisar_con_foto(text: str) -> None:
-    """Aviso con la captura de lo que el agente está viendo, enviado en paralelo para no frenar la reserva.
-    Si la foto no sale, manda el texto solo."""
+def avisar_con_foto(text: str, foto: Path | None = None) -> None:
+    """Aviso con la captura de lo que el agente está viendo (o `foto`), enviado en paralelo para no frenar la
+    reserva. Si la foto no sale, manda el texto solo."""
     try:
-        shutil.copyfile(VISTA, AVISO_FOTO)
+        shutil.copyfile(foto or VISTA, AVISO_FOTO)
     except OSError:
         avisar(text, sonido=True)
         return
@@ -135,9 +141,9 @@ def avisar_con_foto(text: str) -> None:
     threading.Thread(target=enviar).start()
 
 
-def esperar_codigo_telegram(minutos: int = 8) -> str | None:
-    """Espera que respondas al bot con el código SMS (solo dígitos)."""
-    return esperar_respuesta_telegram(minutos, lambda t: re.fullmatch(r"\d{4,8}", t) is not None)
+def esperar_codigo_telegram(minutos: int = 4) -> str | None:
+    """Espera que respondas al bot con el captcha o el código (letras y números, sin espacios)."""
+    return esperar_respuesta_telegram(minutos, lambda t: re.fullmatch(r"[A-Za-z0-9]{3,12}", t) is not None)
 
 
 def esperar_respuesta_telegram(minutos: int, vale) -> str | None:
@@ -180,6 +186,7 @@ class Flujo:
         self.page, self.cfg, self.mem, self.n = page, cfg, mem, n
         self.paso = "inicio"         # último paso alcanzado (para el log y la memoria)
         self.confirmando = False     # tras pulsar Confirmar ya no se repite el recorrido
+        self.detalle = ""            # horario elegido, para el aviso del captcha
         self.vio_citas = False       # con citas a la vista los reintentos van todos y sin esperar
         self.url_previa = ""         # pantalla en que se pulsó el último botón (para volver a ella)
 
@@ -376,23 +383,43 @@ class Flujo:
 
     # --- 2. Datos del solicitante y comprobación de disponibilidad ---------------------------
     def hay_citas(self) -> bool:
-        """Solo dice que hay citas si ve el formulario de datos del solicitante sin el aviso "no hay citas".
-        Antes bastaba con no ver ese aviso, y una página "502 Bad Gateway" pasaba por citas disponibles."""
-        self.paso = "entrada"
-        if NO_CITAS in self.texto():
-            return False
-        self.error_del_sitio()
-        if not (self.hay("#btnEnviar") or self.hay("#txtIdCitado")):
-            raise Inesperado("La página de entrada no es la esperada (no dice si hay citas)")
-        self.paso = "datos"
-        if self.hay("#btnEnviar"):
+        """Solo dice que hay citas si ve el menú con «Solicitar Cita». Antes bastaba con no ver el aviso
+        "no hay citas", y un 502 o una sesión caducada pasaban por citas disponibles.
+        Con "no hay citas" el sitio devuelve el mismo formulario: «Copiar», país y Aceptar consulta de nuevo sin
+        rehacer Cl@ve. Lo hace hasta `reconsultas` veces más por revisión (así apareció una cita en vivo)."""
+        consultas = 1 + int(self.cfg.get("reconsultas", 2))
+        for consulta in range(consultas + 1):
+            self.paso = "entrada" if consulta == 0 else "datos"
+            self.revisar_pagina()
+            if self.menu_citas():
+                self.vio_citas = True
+                return True
+            if not self.hay("#txtIdCitado"):
+                if NO_CITAS in self.texto():
+                    return False
+                raise Inesperado("La página no es la esperada (no dice si hay citas)")
+            if consulta == consultas:
+                return False
+            if consulta:
+                pausa = int(self.cfg.get("pausa_reconsulta_s", 20))
+                log(f"Sin citas (consulta {consulta}/{consultas}); copio los datos y consulto de nuevo "
+                    f"en {pausa} s.")
+                self.page.wait_for_timeout(pausa * 1000 * random.uniform(0.8, 1.2))
+            self.paso = "datos"
             self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante)
             self.foto("validar")
-        if NO_CITAS in self.texto():
-            return False
+        return False
+
+    def menu_citas(self) -> bool:
+        """Pantalla tras Aceptar cuando hay citas: «Solicitar Cita», «Anular Cita»… sin el formulario."""
+        return not self.hay("#txtIdCitado") and (self.hay("#btnEnviar[value*='Solicitar' i]")
+                                                  or "solicitar cita" in self.texto())
+
+    def revisar_pagina(self) -> None:
+        """Error del sitio o sesión caducada: se lanza para repetir el recorrido (nunca cuenta como citas)."""
         self.error_del_sitio()
-        self.vio_citas = True
-        return True
+        if SESION_CADUCADA in self.texto():
+            raise SesionCaducada(self.page.url)
 
     def datos_solicitante(self) -> None:
         cfg = self.cfg
@@ -401,8 +428,13 @@ class Flujo:
             copiar.first.click()
         self.rellenar("#txtIdCitado", cfg.get("nie"))
         self.rellenar("#txtDesCitado", cfg.get("nombre"))
-        if self.hay("select#txtPaisNac") and cfg.get("pais"):
-            self.page.select_option("select#txtPaisNac", label=cfg["pais"].upper())
+        if self.hay("select#txtPaisNac") and cfg.get("pais"):  # «Copiar» no trae el país: se elige siempre
+            valor = self.page.eval_on_selector_all(
+                "select#txtPaisNac option",
+                "(os, p) => (os.find(o => o.text.trim().toUpperCase() === p) || {}).value", cfg["pais"].upper())
+            if not valor:
+                raise Inesperado(f"No encontré el país «{cfg['pais']}» en la lista de nacionalidad")
+            self.page.select_option("select#txtPaisNac", valor)
         self.completar_faltantes()
 
     def rellenar(self, selector: str, valor: str | None) -> None:
@@ -410,14 +442,18 @@ class Flujo:
         if valor and campo.count() and campo.is_editable() and not campo.input_value():
             campo.fill(valor)
 
+    def campos_vacios(self) -> list[dict]:
+        try:
+            return self.page.eval_on_selector_all("input, select, textarea", CAMPOS_VACIOS_JS)
+        except PlaywrightError:
+            return []
+
     def completar_faltantes(self) -> None:
         """Antes de enviar un formulario: si queda un campo vacío que la config no cubre (un dato nuevo que pide
         el sitio), usa lo que respondiste la vez anterior o te lo pregunta por Telegram con la captura.
         La respuesta se guarda en DATOS_EXTRA; "-" lo deja vacío y no lo vuelve a preguntar."""
-        try:
-            campos = self.page.eval_on_selector_all("input, select, textarea", CAMPOS_VACIOS_JS)
-        except PlaywrightError:
-            return
+        campos = self.campos_vacios()
+        self.pedir_captcha(campos)
         datos = leer_datos_extra()
         for c in campos:
             if NO_PREGUNTAR.search(c["sel"] + " " + c["etiqueta"]):
@@ -430,6 +466,34 @@ class Flujo:
                 self.page.select_option(c["sel"], label=valor)
             elif valor:
                 self.page.fill(c["sel"], valor)
+
+    def pedir_captcha(self, campos: list[dict]) -> None:
+        """Si la pantalla pide escribir un captcha (o un código), te manda la imagen por Telegram con sonido y
+        escribe lo que respondas. Si la página se recarga y vuelve a pedirlo, se pregunta otra vez."""
+        campo = next((c for c in campos if not c["lista"] and CODIGO.search(c["sel"] + " " + c["etiqueta"])), None)
+        if not campo:
+            return
+        paso, self.paso = self.paso, "captcha"
+        minutos = int(self.cfg.get("espera_captcha_min", 4))
+        self.foto("captcha")
+        foto = None
+        imagen = self.page.locator(IMAGEN_CAPTCHA)
+        if imagen.count():
+            try:
+                imagen.first.screenshot(path=CAPTCHA)
+                foto = CAPTCHA
+            except PlaywrightError:
+                pass
+        avisar_con_foto(f"🔤 Para confirmar la cita piden «{campo['etiqueta']}». Escríbeme aquí exactamente lo que "
+                        f"ves en la imagen (o el código si te llegó por SMS). Tienes {minutos} min."
+                        + (f"\nHorario: {self.detalle}" if self.detalle else ""), foto)
+        if shutil.which("afplay"):
+            subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
+        codigo = esperar_codigo_telegram(minutos)
+        if not codigo:
+            raise Inesperado(f"No me respondiste «{campo['etiqueta']}» a tiempo")
+        self.page.fill(campo["sel"], codigo)
+        self.paso = paso
 
     def preguntar_dato(self, campo: dict) -> str:
         """Pregunta por Telegram el valor de un campo; en una lista, se responde con el número de la opción."""
@@ -483,23 +547,16 @@ class Flujo:
         self.paso = "horario"
         huecos = page.locator("input[type=radio][id^=cita], input[type=radio][name^=rdbCita]")
         if not huecos.count():
+            self.revisar_pagina()
             raise Inesperado("No encontré horarios para elegir")
-        detalle = self.detalle_hueco(huecos.first)
+        detalle = self.detalle = self.detalle_hueco(huecos.first)
         self.pulsar("horario", "#btnSiguiente", preparar=lambda: huecos.first.check())
         self.foto("verificar")
 
         for casilla in ("#chkTotal", "#enviarCorreo"):
             if self.hay(casilla):
                 page.check(casilla)
-        if self.hay("#txtCodigoVerificacion"):
-            self.paso = "sms"
-            avisar("📱 Te llegó un SMS de la cita previa. Respóndeme aquí SOLO con el código "
-                   f"(tienes unos minutos).\nHorario elegido: {detalle}", sonido=True)
-            codigo = esperar_codigo_telegram()
-            if not codigo:
-                raise Inesperado("No llegó el código SMS a tiempo")
-            page.fill("#txtCodigoVerificacion", codigo)
-        self.completar_faltantes()
+        self.completar_faltantes()  # aquí el sitio pide el captcha: te lo manda por Telegram
         self.confirmando = True  # desde aquí no se repite nada: podría duplicar la reserva
         self.pulsar("confirmar", "#btnConfirmar", reintentar=False)
         self.foto("confirmada")
@@ -653,7 +710,7 @@ PASOS = {  # qué hace cada paso, para que los avisos de error se entiendan sin 
     "vuelta_clave": "volver de Cl@ve al sitio de citas", "entrada": "ver si hay citas",
     "datos": "llenar tus datos",
     "solicitar": "pedir la cita", "contacto": "poner teléfono y correo",
-    "horario": "elegir el horario", "sms": "esperar el código SMS", "confirmar": "confirmar la cita",
+    "horario": "elegir el horario", "captcha": "esperar que escribas el captcha", "confirmar": "confirmar la cita",
 }
 
 
@@ -788,7 +845,7 @@ def leer_respuestas(mem: Aprendizaje, cfg: dict) -> None:
             if msg["text"].startswith("/"):
                 log(f"Comando por Telegram: {msg['text'][:40]}")
                 atender_comando(msg["text"], mem, cfg)
-            elif not re.fullmatch(r"\d{4,8}", msg["text"].strip()):  # un código SMS fuera de tiempo se ignora
+            elif not re.fullmatch(r"[A-Za-z0-9]{3,12}", msg["text"].strip()):  # captcha fuera de tiempo: se ignora
                 notify.telegram(AYUDA, "cita", silent=True)
             continue
         q = u.get("callback_query") or {}

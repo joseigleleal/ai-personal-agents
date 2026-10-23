@@ -34,9 +34,11 @@ PAGINAS = {
                onclick="document.getElementById('txtIdCitado').value='Y0000000T';
                         document.getElementById('txtDesCitado').value='PERSONA DE PRUEBA'">
         <input id='txtIdCitado' name='txtIdCitado'><input id='txtDesCitado' name='txtDesCitado'>
-        <select id='txtPaisNac' name='txtPaisNac'><option>ARGENTINA</option><option>PERU</option></select>""",
+        <select id='txtPaisNac' name='txtPaisNac'><option value=''>Seleccionar ...</option>
+            <option value='1'>ARGENTINA</option><option value='2'>PERU
+            </option></select>""",
                       "btnEnviar"),
-    "acValidarEntrada": form("acCitar", "<p>Solicitar cita</p>", "btnEnviar"),
+    "acValidarEntrada": form("acCitar", "", "btnEnviar").replace("value='Siguiente'", "value='Solicitar Cita'"),
     "acCitar": form("acVerFormulario", "<select id='idSede' name='idSede'><option value='1'>Oficina 1</option></select>"),
     "acVerFormulario": form("acOfertarCita", """
         <input id='txtTelefonoCitado' name='txtTelefonoCitado'>
@@ -47,7 +49,9 @@ PAGINAS = {
     "acVerificarCita": form("acGrabarCita", """
         <input type='checkbox' id='chkTotal' name='chkTotal'>
         <input type='checkbox' id='enviarCorreo' name='enviarCorreo'>
-        <input id='txtCodigoVerificacion' name='txtCodigoVerificacion'>""", "btnConfirmar"),
+        <img id='imgCaptcha' src='data:image/gif;base64,R0lGODlhAQABAAAAACw=' width='80' height='30'>
+        <label for='txtCaptcha'>Introduzca los caracteres de la imagen</label>
+        <input id='txtCaptcha' name='txtCaptcha'>""", "btnConfirmar"),
     "acGrabarCita": "<html><body><p>Su cita ha sido CONFIRMADA.</p><p>Número de justificante: ABC123456</p></body></html>",
     # Botón que aparece tarde y botón de Cl@ve sin el id conocido
     "lento": "<html><body><form method='post' action='acCitar'></form><script>setTimeout(() => "
@@ -57,7 +61,7 @@ PAGINAS = {
 }
 
 CFG = {"provincia": "Prueba", "pais": "Peru", "telefono": "600000000", "email": "prueba@example.com",
-       "reintentos": 2, "espera_reintento_s": 0}
+       "reintentos": 2, "espera_reintento_s": 0, "pausa_reconsulta_s": 0}
 
 
 class Memoria(unittest.TestCase):
@@ -295,14 +299,16 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(len(llamadas), 2)
         self.assertIn("ABC123456", run.DONE.read_text())
         self.assertIn("20/11/2026", run.DONE.read_text())
-        self.assertEqual(self.enviados["acValidarEntrada"]["txtPaisNac"], ["PERU"])
+        self.assertEqual(self.enviados["acValidarEntrada"]["txtPaisNac"], ["2"])
         self.assertEqual(self.enviados["acOfertarCita"]["txtTelefonoCitado"], ["600000000"])
         self.assertEqual(self.enviados["acOfertarCita"]["emailDOS"], ["prueba@example.com"])
         self.assertEqual(self.enviados["acVerificarCita"]["rdbCita"], ["1"])
-        self.assertEqual(self.enviados["acGrabarCita"]["txtCodigoVerificacion"], ["123456"])
+        self.assertEqual(self.enviados["acGrabarCita"]["txtCaptcha"], ["123456"])
+        self.assertIn("lo que ves en la imagen", self.avisar_con_foto.call_args_list[1].args[0])
+        self.assertIn("20/11/2026", self.avisar_con_foto.call_args_list[1].args[0])
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["hay_citas", "reservada"])
         self.assertTrue(any(run.PAGINAS.glob("*/*.html")), "debe guardar el HTML de la reserva")
-        self.avisar_con_foto.assert_called_once()  # el aviso de citas lleva la captura de lo que vio
+        self.assertEqual(self.avisar_con_foto.call_count, 2)  # citas a la vista y captcha, con su imagen
 
     def test_dato_que_falta_lo_pregunta_y_lo_recuerda(self):
         def entrar(flujo):
@@ -341,6 +347,57 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(self.mem.d["revisiones"], [])
         self.avisar_con_foto.assert_not_called()
         self.assertIn("página de error «bad gateway»", run.explicar_error(e.exception))
+
+    def test_sin_citas_reconsulta_sin_rehacer_clave(self):
+        """Visto en vivo: con «no hay citas» el sitio devuelve el formulario; Copiar + país + Aceptar consulta otra
+        vez y ahí apareció la cita."""
+        entradas = []
+
+        def entrar(flujo):
+            entradas.append(1)
+            flujo.page.goto(SITIO + "acEntrada")
+
+        sin_citas = PAGINAS["acEntrada"].replace("<form", f"<p>{run.NO_CITAS.capitalize()}.</p><form")
+        respuestas = iter([sin_citas, sin_citas, PAGINAS["acValidarEntrada"]])
+        servir = self.servir
+
+        def servir_validar(route):
+            if route.request.url.endswith("acValidarEntrada"):
+                self.enviados.setdefault("consultas", []).append(parse_qs(route.request.post_data)["txtPaisNac"])
+                return route.fulfill(content_type="text/html; charset=utf-8", body=next(respuestas))
+            servir(route)
+
+        self.contexto.unroute(SITIO + "**")
+        self.contexto.route(SITIO + "**", servir_validar)
+        with mock.patch.object(run.Flujo, "entrar", entrar):
+            run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
+        self.assertEqual(len(entradas), 1)
+        self.assertEqual(self.enviados["consultas"], [["2"]] * 3)  # el país va en cada consulta
+        self.assertIn("ABC123456", run.DONE.read_text())
+
+    def test_sin_citas_tras_todas_las_consultas(self):
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "acEntrada")
+
+        sin_citas = PAGINAS["acEntrada"].replace("<form", f"<p>{run.NO_CITAS.capitalize()}.</p><form")
+        with mock.patch.object(run.Flujo, "entrar", entrar), \
+                mock.patch.dict(PAGINAS, {"acValidarEntrada": sin_citas}):
+            run.recorrido(self.contexto, {**CFG, "reconsultas": 1}, self.mem, solo_revisar=False)
+        self.assertFalse(run.DONE.exists())
+        self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["sin_citas"])
+        self.avisar_con_foto.assert_not_called()
+
+    def test_sesion_caducada_no_es_hay_citas(self):
+        """Pasó de verdad el 23/10: «Su sesión ha caducado» tras Aceptar se tomó como citas disponibles."""
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "acEntrada")
+
+        caducada = "<html><body><p>Su sesión ha caducado por permanecer demasiado tiempo inactiva.</p></body></html>"
+        with mock.patch.object(run.Flujo, "entrar", entrar), \
+                mock.patch.dict(PAGINAS, {"acValidarEntrada": caducada}):
+            with self.assertRaises(run.SesionCaducada):
+                run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
+        self.avisar_con_foto.assert_not_called()
 
     def test_pagina_desconocida_no_es_hay_citas(self):
         def entrar(flujo):

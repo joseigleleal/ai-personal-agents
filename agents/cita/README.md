@@ -17,11 +17,12 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 ```
 index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentación con Cl@ve"
     ──▶ pasarela Cl@ve ──▶ "DNIe / Certificado electrónico" (el agente entrega el .p12)
-    ──▶ acEntrada: ¿"no hay citas disponibles"?
-          sí ─▶ aviso "⏳ sin citas" y termina
-          ¿página de error (502, 500…) o desconocida? ─▶ error: repite el recorrido
-          formulario de datos sin ese aviso ─▶ 🚨 aviso con la captura ─▶ "Copiar a datos solicitante" + país ─▶ Solicitar cita
-                ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram) ─▶ primer horario ─▶ (código SMS por Telegram) ─▶ Confirmar
+    ──▶ acEntrada: "Copiar a datos solicitante" + país ─▶ Aceptar
+          ¿vuelve el formulario con "no hay citas disponibles"? ─▶ Copiar + país + Aceptar otra vez (hasta `reconsultas`)
+                todas sin citas ─▶ estado "sin citas" y termina
+          ¿página de error (502, 500…), sesión caducada o desconocida? ─▶ error: repite el recorrido
+          menú con "Solicitar Cita" ─▶ 🚨 aviso con la captura ─▶ Solicitar cita
+                ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram) ─▶ primer horario ─▶ captcha por Telegram ─▶ Confirmar
                 ─▶ ✅ aviso con fecha/hora y justificante ─▶ crea data/cita/RESERVADA y deja de buscar
 ```
 
@@ -35,7 +36,7 @@ puerta": cada minuto se despierta, decide si ya le toca mirar y, si le toca, abr
 recorre el sitio igual que una persona (provincia, trámite, identificación con certificado) y mira si hay citas.
 
 Si hay, avisa con una foto de la pantalla y reserva la primera que vea; si el formulario pide un dato que no
-tiene, o el código SMS, te lo pregunta por Telegram. Solo decide el ritmo (más seguido mientras todo va bien,
+tiene, o el captcha (las letras de la imagen), te lo pregunta por Telegram. Solo decide el ritmo (más seguido mientras todo va bien,
 sin pasar del límite que aprendió), las esperas de cada botón y cuándo reintentar. Lo dudoso te lo deja a ti:
 si una página parece un bloqueo o un error raro, te pregunta con dos botones y aprende de tu respuesta.
 
@@ -71,11 +72,14 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
    `client_certificates` para los `certificado.origenes` de la config.
 6. `recorrido` → `Flujo.entrar`: inicio → provincia → oficina y trámite → botón Cl@ve → "Certificado electrónico"
    → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
-7. `Flujo.hay_citas`: "no hay citas disponibles" → `sin_citas` (⏳ espaciado por `toca_aviso`). Página de error
-   del sitio → `ErrorDelSitio`; página sin el formulario esperado → `Inesperado`. Si ve el formulario: 🚨 con
-   captura (`avisar_con_foto`, en un hilo aparte) y sigue.
-8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina → contacto → primer horario → código SMS
-   (`esperar_codigo_telegram`, hasta 8 min) → Confirmar. Antes de cada envío, `completar_faltantes` busca
+7. `Flujo.hay_citas`: rellena el formulario (`datos_solicitante`: Copiar + país, que Copiar no trae) y pulsa
+   Aceptar. Si el sitio devuelve el formulario con "no hay citas disponibles", repite Copiar + país + Aceptar hasta
+   `reconsultas` veces, con `pausa_reconsulta_s` entre una y otra: cada Aceptar es una consulta nueva sin rehacer
+   Cl@ve. Solo hay citas si aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
+   `ErrorDelSitio`, sesión caducada → `SesionCaducada`, otra página → `Inesperado`. Con citas: 🚨 con captura
+   (`avisar_con_foto`, en un hilo aparte) y sigue.
+8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina → contacto → primer horario → captcha
+   (`pedir_captcha`, hasta `espera_captcha_min`) → Confirmar. Antes de cada envío, `completar_faltantes` busca
    campos vacíos y pregunta por Telegram los que no conoce. Si ve "confirmada", crea `RESERVADA` y avisa ✅.
 9. Si algo falla: `revisar_bloqueo` (frases de `BLOCKED`) lanza `Bloqueado` → pausa y aviso ⛔. Otro error →
    `recorrido` repite todo con cookies limpias hasta `reintentos`, salvo que ya se haya pulsado Confirmar o
@@ -120,7 +124,8 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 - «requested url was rejected» ya no cuenta como bloqueo (salía muy seguido y nunca lo fue); bloqueo es «too many
   requests». Si el botón no aparece en `recargar_tras_s` (20) con la página cargada, la recarga una vez; si la vuelta
   de Cl@ve se traba `recargar_vuelta_clave_s` (40) en `procesarRespuestaClave`, también.
-- Datos que faltan: `espera_dato_min` (4); SMS: 8 min. Aviso ⏳: `aviso_sin_citas_min` (30).
+- Datos que faltan: `espera_dato_min` (4); captcha: `espera_captcha_min` (4). Aviso ⏳: `aviso_sin_citas_min` (30).
+- Consultas por revisión: 1 + `reconsultas` (2), con `pausa_reconsulta_s` (20, ±20 %) entre ellas.
 
 **Para replicarlo**
 
@@ -234,17 +239,24 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   memoria; así puede acelerar o frenar sin reinstalar nada.
 - **Un mensaje de estado en vez de un ⏳ por revisión.** Con revisiones cada pocos minutos, un mensaje por cada una
   era ruido. Ahora el bot edita siempre el mismo mensaje (`notify.telegram_estado`, `editMessageText`): última
-  revisión, conteo de la última hora, ciclo y próxima. Suena solo lo que pide atención (citas, SMS, dato que falta,
+  revisión, conteo de la última hora, ciclo y próxima. Suena solo lo que pide atención (citas, captcha, dato que falta,
   bloqueo o error nuevo); volver a "sin citas" llega en silencio, y a las `resumen_diario_hora` (21) llega el
   resumen de 24 h sin sonido. Con `estado_editable: false` vuelve el ⏳ cada `aviso_sin_citas_min`.
 - **Ciclo real, no solo la espera.** El ritmo aprendido es la espera *después* de cada revisión; el ciclo que se ve
   llegar suma lo que dura la revisión (~1,4 min) y la espera del timer. Los mensajes muestran el ciclo medido
   (`Aprendizaje.ciclo_real`, mediana entre inicios). No se acortó la espera para igualarlo: el piso se aprendió con
   ese ciclo y acortarlo traería bloqueos. En el servidor el timer mira cada 20 s para no sumar demora inútil.
-- **Código SMS por Telegram.** Al reservar, el sitio manda un SMS al teléfono de `config/cita.yaml`. El agente
-  avisa "📱 Te llegó un SMS" con sonido y espera hasta 8 min a que respondas **en el chat del bot del agente**
-  solo con el código (4 a 8 dígitos). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
-  confirma. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
+- **Reconsultar sin rehacer Cl@ve.** Con "no hay citas" el sitio devuelve el mismo formulario de datos; pulsar
+  Copiar, elegir el país y Aceptar es una consulta nueva (así salió una cita en una prueba a mano). Entrar con
+  Cl@ve es el paso más lento y el que más falla, así que cada revisión aprovecha la sesión para `reconsultas`
+  consultas más. La pausa entre ellas evita parecer un robot; si el sitio bloquea, bajar `reconsultas`.
+- **Solo hay citas si se ve "Solicitar Cita".** Antes bastaba con no ver "no hay citas", y una página de
+  "sesión caducada" pasó por citas disponibles (aviso 🚨 falso). Ahora hace falta el menú real.
+- **Captcha por Telegram.** Antes de Confirmar el sitio pide escribir las letras de una imagen (no manda SMS).
+  El agente busca el campo (captcha, código, caracteres…), recorta la imagen y te la manda con sonido junto con
+  el horario elegido; espera `espera_captcha_min` a que respondas **en el chat del bot del agente** con el texto
+  (letras y números, sin espacios). Lo lee con `getUpdates` (descarta los mensajes viejos), lo escribe y
+  confirma. No se guarda: cambia cada vez. Conviene un bot propio (`TELEGRAM_BOT_TOKEN_CITA`) para que ningún otro proceso lea esos mensajes;
   hay que haberle enviado `/start` antes. Si no llega a tiempo, avisa y la cita no se confirma.
 - **Datos que faltan, por Telegram.** Antes de enviar cada formulario (datos del solicitante, oficina, contacto,
   confirmar) busca campos visibles que sigan vacíos: un dato que el sitio pide y `config/cita.yaml` no tiene.
@@ -252,7 +264,7 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   `espera_dato_min` (4) tu respuesta: el valor, el número de la opción o «-» para dejarlo vacío. Lo guarda en
   `data/cita/datos_extra.json` y no lo vuelve a preguntar. Por qué no basta con mandar el enlace: el sitio no
   deja la misma persona con dos sesiones a la vez, así que entrar tú mientras el agente reserva no sirve.
-  Observaciones y el código SMS no se preguntan por esta vía.
+  Observaciones y el captcha no se preguntan por esta vía.
 - **Tipos de error que ya respondiste.** Cada error se clasifica por paso y causa (p. ej. «vuelta_clave |
   bad gateway», «acceso_clave | no respondió a tiempo»). Lo que respondas con los botones vale para ese
   tipo: si dijiste "error normal", los siguientes de ese tipo quedan en el log y el historial sin avisar ni
@@ -365,3 +377,8 @@ ssh oracle 'last -n 10'                                                 # últim
   acepta hay varios bloqueos (cada uno cuesta una pausa), y al bajar el piso vuelve a probar. Si eso
   molesta, subir `ritmo.sube_bloqueo` (escalones más grandes), `ritmo.horas_baja_piso` o `ritmo.minimo_s`.
 - Si el sitio cambia su HTML, hay que ajustar los selectores (las capturas muestran dónde se detuvo).
+- El campo y la imagen del captcha se buscan por nombres probables (captcha, código, caracteres…): aún no se
+  verificaron con la página real. Si no los encuentra, el campo queda vacío y el aviso de error lo dice.
+- No adelanta una cita ya reservada: el sitio no deja mover una cita (solo anular y pedir otra) ni tener dos
+  citas del mismo trámite con el mismo NIE, y anular primero para buscar otra arriesga quedarse sin ninguna.
+  Tras reservar, el agente deja de buscar.
