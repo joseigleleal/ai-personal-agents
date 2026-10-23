@@ -390,6 +390,7 @@ class Flujo:
         consulta otra vez, hasta `reconsultas` veces más. Lo que falle desde la 2.ª consulta no rehace el recorrido:
         las consultas anteriores ya dijeron "sin citas"."""
         consultas = 1 + int(self.cfg.get("reconsultas", 2))
+        self.url_formulario = self.page.url
         for consulta in range(consultas + 1):
             self.paso = "entrada" if consulta == 0 else "datos"
             try:
@@ -428,14 +429,20 @@ class Flujo:
 
     def volver_al_formulario(self) -> bool:
         """Tras Aceptar, "no hay citas" llega en una página cuyo único botón lleva al inicio (habría que rehacer
-        Cl@ve). Se prueba volver atrás al formulario, en la misma sesión, para consultar otra vez."""
-        try:
-            self.page.go_back(wait_until="domcontentloaded", timeout=20_000)
-            self.page.locator("#txtIdCitado").wait_for(timeout=int(self.cfg.get("espera_volver_s", 20)) * 1000)
-        except PlaywrightError:
-            log(f"No pude volver al formulario para consultar otra vez (quedé en {self.page.url}).")
-            return False
-        return True
+        Cl@ve). Para consultar otra vez, en la misma sesión: atrás del navegador y, si no vuelve (en vivo se quedó
+        en acValidarEntrada), abre de nuevo la dirección del formulario."""
+        espera = int(self.cfg.get("espera_volver_s", 20)) * 1000
+        for ir in (lambda: self.page.go_back(wait_until="domcontentloaded", timeout=20_000),
+                   lambda: self.page.goto(self.url_formulario, wait_until="domcontentloaded", timeout=30_000)):
+            try:
+                if ir() is None and "acvalidarentrada" in self.page.url.lower():
+                    continue  # «atrás» no se movió: no vale la pena esperar el formulario
+                self.page.locator("#txtIdCitado").wait_for(timeout=espera)
+                return True
+            except PlaywrightError:
+                continue
+        log(f"No pude volver al formulario para consultar otra vez (quedé en {self.page.url}).")
+        return False
 
     def menu_citas(self) -> bool:
         """Pantalla tras Aceptar cuando hay citas: «Solicitar Cita», «Anular Cita»… sin el formulario."""

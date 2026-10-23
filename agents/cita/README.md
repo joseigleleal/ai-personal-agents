@@ -74,7 +74,8 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
    → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
 7. `Flujo.hay_citas`: rellena el formulario (`datos_solicitante`: Copiar + país, que Copiar no trae) y pulsa
    Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). La respuesta sin citas
-   es una página de información cuyo único botón lleva al inicio, así que `volver_al_formulario` va atrás y repite
+   es una página de información cuyo único botón lleva al inicio, así que `volver_al_formulario` va atrás (y si el
+   sitio no se mueve, abre de nuevo la dirección del formulario) y repite
    Copiar + país + Aceptar hasta `reconsultas` veces, con `pausa_reconsulta_s` entre una y otra, sin rehacer
    Cl@ve. Si una consulta extra falla (error, sesión caducada), se queda con "sin citas" y no rehace el recorrido. Solo hay citas si aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
    `ErrorDelSitio`, sesión caducada → `SesionCaducada`, otra página → `Inesperado`. Con citas: 🚨 con captura
