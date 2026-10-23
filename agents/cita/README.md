@@ -17,8 +17,8 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 ```
 index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentación con Cl@ve"
     ──▶ pasarela Cl@ve ──▶ "DNIe / Certificado electrónico" (el agente entrega el .p12)
-    ──▶ acEntrada: "Copiar a datos solicitante" + país ─▶ Aceptar
-          ¿vuelve el formulario con "no hay citas disponibles"? ─▶ Copiar + país + Aceptar otra vez (hasta `reconsultas`)
+    ──▶ acEntrada (suele llegar ya con "no hay citas"): "Copiar a datos solicitante" + país ─▶ Aceptar
+          ¿"no hay citas disponibles"? ─▶ atrás al formulario ─▶ Copiar + país + Aceptar otra vez (hasta `reconsultas`)
                 todas sin citas ─▶ estado "sin citas" y termina
           ¿página de error (502, 500…), sesión caducada o desconocida? ─▶ error: repite el recorrido
           menú con "Solicitar Cita" ─▶ 🚨 aviso con la captura ─▶ Solicitar cita
@@ -73,9 +73,10 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 6. `recorrido` → `Flujo.entrar`: inicio → provincia → oficina y trámite → botón Cl@ve → "Certificado electrónico"
    → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
 7. `Flujo.hay_citas`: rellena el formulario (`datos_solicitante`: Copiar + país, que Copiar no trae) y pulsa
-   Aceptar. Si el sitio devuelve el formulario con "no hay citas disponibles", repite Copiar + país + Aceptar hasta
-   `reconsultas` veces, con `pausa_reconsulta_s` entre una y otra: cada Aceptar es una consulta nueva sin rehacer
-   Cl@ve. Solo hay citas si aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
+   Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). La respuesta sin citas
+   es una página de información cuyo único botón lleva al inicio, así que `volver_al_formulario` va atrás y repite
+   Copiar + país + Aceptar hasta `reconsultas` veces, con `pausa_reconsulta_s` entre una y otra, sin rehacer
+   Cl@ve. Si una consulta extra falla (error, sesión caducada), se queda con "sin citas" y no rehace el recorrido. Solo hay citas si aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
    `ErrorDelSitio`, sesión caducada → `SesionCaducada`, otra página → `Inesperado`. Con citas: 🚨 con captura
    (`avisar_con_foto`, en un hilo aparte) y sigue.
 8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina → contacto → primer horario → captcha
@@ -246,8 +247,10 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   llegar suma lo que dura la revisión (~1,4 min) y la espera del timer. Los mensajes muestran el ciclo medido
   (`Aprendizaje.ciclo_real`, mediana entre inicios). No se acortó la espera para igualarlo: el piso se aprendió con
   ese ciclo y acortarlo traería bloqueos. En el servidor el timer mira cada 20 s para no sumar demora inútil.
-- **Reconsultar sin rehacer Cl@ve.** Con "no hay citas" el sitio devuelve el mismo formulario de datos; pulsar
-  Copiar, elegir el país y Aceptar es una consulta nueva (así salió una cita en una prueba a mano). Entrar con
+- **Reconsultar sin rehacer Cl@ve.** La entrada suele llegar con el aviso "no hay citas" sobre el formulario;
+  antes el agente se rendía ahí, pero pulsar Copiar, elegir el país y Aceptar es una consulta nueva (así salió una
+  cita en una prueba a mano). La respuesta sin citas no trae el formulario (su botón lleva al inicio), así que
+  para las consultas extra vuelve atrás del navegador. Entrar con
   Cl@ve es el paso más lento y el que más falla, así que cada revisión aprovecha la sesión para `reconsultas`
   consultas más. La pausa entre ellas evita parecer un robot; si el sitio bloquea, bajar `reconsultas`.
 - **Solo hay citas si se ve "Solicitar Cita".** Antes bastaba con no ver "no hay citas", y una página de

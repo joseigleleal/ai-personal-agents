@@ -60,6 +60,10 @@ PAGINAS = {
     "clave": form("acCitar", "", "otroId").replace("value='Siguiente'", "value='Acceso Cl@ve'"),
 }
 
+# Respuesta real a Aceptar sin citas: solo información y un Aceptar que lleva al inicio (sin el formulario)
+SIN_CITAS = ("<html><body><p>En este momento no hay citas disponibles.</p><form action='salirInicio'>"
+             "<input type='button' id='btnSubmit' value='Aceptar'></form></body></html>")
+
 CFG = {"provincia": "Prueba", "pais": "Peru", "telefono": "600000000", "email": "prueba@example.com",
        "reintentos": 2, "espera_reintento_s": 0, "pausa_reconsulta_s": 0}
 
@@ -357,8 +361,7 @@ class SitioSimulado(unittest.TestCase):
             entradas.append(1)
             flujo.page.goto(SITIO + "acEntrada")
 
-        sin_citas = PAGINAS["acEntrada"].replace("<form", f"<p>{run.NO_CITAS.capitalize()}.</p><form")
-        respuestas = iter([sin_citas, sin_citas, PAGINAS["acValidarEntrada"]])
+        respuestas = iter([SIN_CITAS, SIN_CITAS, PAGINAS["acValidarEntrada"]])
         servir = self.servir
 
         def servir_validar(route):
@@ -379,9 +382,8 @@ class SitioSimulado(unittest.TestCase):
         def entrar(flujo):
             flujo.page.goto(SITIO + "acEntrada")
 
-        sin_citas = PAGINAS["acEntrada"].replace("<form", f"<p>{run.NO_CITAS.capitalize()}.</p><form")
         with mock.patch.object(run.Flujo, "entrar", entrar), \
-                mock.patch.dict(PAGINAS, {"acValidarEntrada": sin_citas}):
+                mock.patch.dict(PAGINAS, {"acValidarEntrada": SIN_CITAS}):
             run.recorrido(self.contexto, {**CFG, "reconsultas": 1}, self.mem, solo_revisar=False)
         self.assertFalse(run.DONE.exists())
         self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["sin_citas"])

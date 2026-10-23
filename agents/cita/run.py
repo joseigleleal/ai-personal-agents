@@ -385,19 +385,28 @@ class Flujo:
     def hay_citas(self) -> bool:
         """Solo dice que hay citas si ve el menú con «Solicitar Cita». Antes bastaba con no ver el aviso
         "no hay citas", y un 502 o una sesión caducada pasaban por citas disponibles.
-        Con "no hay citas" el sitio devuelve el mismo formulario: «Copiar», país y Aceptar consulta de nuevo sin
-        rehacer Cl@ve. Lo hace hasta `reconsultas` veces más por revisión (así apareció una cita en vivo)."""
+        La entrada suele llegar ya con el aviso "no hay citas" y el formulario: Copiar + país + Aceptar consulta de
+        nuevo (así apareció una cita en vivo). Si esa también dice "no hay citas", vuelve atrás al formulario y
+        consulta otra vez, hasta `reconsultas` veces más. Lo que falle desde la 2.ª consulta no rehace el recorrido:
+        las consultas anteriores ya dijeron "sin citas"."""
         consultas = 1 + int(self.cfg.get("reconsultas", 2))
         for consulta in range(consultas + 1):
             self.paso = "entrada" if consulta == 0 else "datos"
-            self.revisar_pagina()
+            try:
+                self.revisar_pagina()
+            except (ErrorDelSitio, SesionCaducada) as e:
+                if consulta < 2:
+                    raise
+                log(f"La consulta {consulta} dio «{e}»; me quedo con las anteriores (sin citas).")
+                return False
             if self.menu_citas():
                 self.vio_citas = True
                 return True
             if not self.hay("#txtIdCitado"):
-                if NO_CITAS in self.texto():
+                if NO_CITAS not in self.texto():
+                    raise Inesperado("La página no es la esperada (no dice si hay citas)")
+                if consulta == 0 or consulta == consultas or not self.volver_al_formulario():
                     return False
-                raise Inesperado("La página no es la esperada (no dice si hay citas)")
             if consulta == consultas:
                 return False
             if consulta:
@@ -406,9 +415,27 @@ class Flujo:
                     f"en {pausa} s.")
                 self.page.wait_for_timeout(pausa * 1000 * random.uniform(0.8, 1.2))
             self.paso = "datos"
-            self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante)
+            try:  # la 1.ª consulta reintenta como cualquier paso; las siguientes, si fallan, se dejan
+                self.pulsar("datos", "#btnEnviar", preparar=self.datos_solicitante, reintentar=not consulta)
+            except (ErrorDelSitio, PlaywrightError) as e:
+                if not consulta:
+                    raise
+                log(f"La consulta {consulta + 1} dio «{str(e).splitlines()[0][:100]}»; me quedo con las "
+                    "anteriores (sin citas).")
+                return False
             self.foto("validar")
         return False
+
+    def volver_al_formulario(self) -> bool:
+        """Tras Aceptar, "no hay citas" llega en una página cuyo único botón lleva al inicio (habría que rehacer
+        Cl@ve). Se prueba volver atrás al formulario, en la misma sesión, para consultar otra vez."""
+        try:
+            self.page.go_back(wait_until="domcontentloaded", timeout=20_000)
+            self.page.locator("#txtIdCitado").wait_for(timeout=int(self.cfg.get("espera_volver_s", 20)) * 1000)
+        except PlaywrightError:
+            log(f"No pude volver al formulario para consultar otra vez (quedé en {self.page.url}).")
+            return False
+        return True
 
     def menu_citas(self) -> bool:
         """Pantalla tras Aceptar cuando hay citas: «Solicitar Cita», «Anular Cita»… sin el formulario."""
