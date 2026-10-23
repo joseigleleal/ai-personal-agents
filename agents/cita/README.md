@@ -20,7 +20,9 @@ index.html ──▶ provincia ──▶ oficina + trámite ──▶ "Presentac
     ──▶ acEntrada (suele llegar ya con "no hay citas"): "Copiar a datos solicitante" + país ─▶ Aceptar
           ¿"no hay citas disponibles"? ─▶ estado "sin citas" y termina
           ¿página de error (502, 500…), sesión caducada o desconocida? ─▶ error: repite el recorrido
-          menú con "Solicitar Cita" ─▶ 🚨 aviso con la captura ─▶ Solicitar cita
+          menú "Solicitar Cita / Consultar / Anular…" (sale con o sin citas) ─▶ Solicitar Cita
+                ¿"no hay citas disponibles"? ─▶ estado "sin citas" y termina
+                si no ─▶ 🚨 aviso con la captura
                 ─▶ teléfono y correo (un campo vacío que no conoce: te lo pregunta por Telegram)
                 ─▶ lista de citas (1 a 3) + captcha: elige la primera (la más próxima) y te manda el captcha por Telegram
                 ─▶ resumen con casillas "conforme" y "recibir por correo" ─▶ Confirmar
@@ -74,13 +76,13 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 6. `recorrido` → `Flujo.entrar`: inicio → provincia → oficina y trámite → botón Cl@ve → "Certificado electrónico"
    → espera hasta 120 s la vuelta a `icpplus/ac…` (sesión caducada → `SesionCaducada`).
 7. `Flujo.hay_citas`: rellena el formulario (`datos_solicitante`: Copiar + país, que Copiar no trae) y pulsa
-   Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). Solo hay citas si
-   aparece el menú con "Solicitar Cita" (`menu_citas`); error del sitio →
+   Aceptar, aunque la entrada ya diga "no hay citas" (pulsar Aceptar consulta de nuevo). Si sale el menú
+   (`menu_citas`), pulsa "Solicitar Cita": solo hay citas si la respuesta no dice "no hay citas"; error del sitio →
    `ErrorDelSitio`, sesión caducada → `SesionCaducada`, otra página → `Inesperado`. Con citas: 🚨 con captura
    (`avisar_con_foto`, en un hilo aparte) y sigue.
-8. `Flujo.reservar` (salvo `--solo-revisar`): solicitar → oficina (si la pide) → contacto → lista de citas: marca
-   la primera y, en la misma pantalla, el captcha (`pedir_captcha`, hasta `espera_captcha_min`) → casillas →
-   Confirmar. Antes de cada envío, `completar_faltantes` busca
+8. `Flujo.reservar` (salvo `--solo-revisar`): oficina (si la pide) → contacto → lista de citas: marca
+   la primera y, en la misma pantalla, el captcha (`pedir_captcha`, hasta `espera_captcha_min`) → marca todas
+   las casillas visibles («Estoy conforme…», «Acepto recibir información… en el correo») → Confirmar. Antes de cada envío, `completar_faltantes` busca
    campos vacíos y pregunta por Telegram los que no conoce. Si ve "confirmada", crea `RESERVADA` y avisa ✅.
 9. Si algo falla: `revisar_bloqueo` (frases de `BLOCKED`) lanza `Bloqueado` → pausa y aviso ⛔. Otro error →
    `recorrido` repite todo con cookies limpias hasta `reintentos`, salvo que ya se haya pulsado Confirmar o
@@ -252,8 +254,9 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   (así salió una cita en una prueba a mano). Se probó una tercera consulta en la misma sesión y no se puede: la
   respuesta sin citas no trae el formulario (su botón lleva al inicio), y ni «atrás» ni abrir de nuevo su
   dirección lo devuelven.
-- **Solo hay citas si se ve "Solicitar Cita".** Antes bastaba con no ver "no hay citas", y una página de
-  "sesión caducada" pasó por citas disponibles (aviso 🚨 falso). Ahora hace falta el menú real.
+- **Hay citas solo si "Solicitar Cita" no responde "no hay citas".** Antes bastaba con no ver "no hay citas", y
+  una página de "sesión caducada" pasó por citas disponibles (aviso 🚨 falso). Tampoco basta con ver el menú
+  "Solicitar Cita / Consultar / Anular": sale aunque no haya citas, así que el agente lo pulsa y mira la respuesta.
 - **Captcha por Telegram.** En la pantalla de la lista de citas («Selecciona una de las siguientes citas
   disponibles», con «dispones de 5 minutos») el sitio pide escribir las letras de una imagen; no manda SMS.
   El agente marca la primera cita (la más próxima), busca el campo (captcha, código, caracteres…), recorta la

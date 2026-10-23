@@ -52,6 +52,7 @@ PAGINAS = {
     "acVerificarCita": form("acGrabarCita", """
         <input type='checkbox' id='chkTotal' name='chkTotal'>
         <input type='checkbox' id='enviarCorreo' name='enviarCorreo'>
+        <input type='checkbox' id='otraCasilla' name='otraCasilla'>
 """, "btnConfirmar"),
     "acGrabarCita": "<html><body><p>CITA CONFIRMADA</p><div>Nº de Justificante de cita:<br><b>ABC123456</b></div>"
                     "</body></html>",
@@ -286,8 +287,8 @@ class SitioSimulado(unittest.TestCase):
 
     def servir(self, route):
         pagina = route.request.url.split("/")[-1].split("?")[0]
-        if route.request.post_data:
-            self.enviados[pagina] = parse_qs(route.request.post_data)
+        if route.request.method == "POST":
+            self.enviados[pagina] = parse_qs(route.request.post_data or "")
         route.fulfill(content_type="text/html; charset=utf-8", body=PAGINAS.get(pagina, "no existe"))
 
     def test_reserva_completa_tras_un_fallo_de_entrada(self):
@@ -309,6 +310,8 @@ class SitioSimulado(unittest.TestCase):
         self.assertEqual(self.enviados["acOfertarCita"]["txtTelefonoCitado"], ["600000000"])
         self.assertEqual(self.enviados["acOfertarCita"]["emailDOS"], ["prueba@example.com"])
         self.assertEqual(self.enviados["acVerificarCita"]["rdbCita"], ["1"])
+        for casilla in ("chkTotal", "enviarCorreo", "otraCasilla"):  # «conforme», «recibir por correo»…
+            self.assertIn(casilla, self.enviados["acGrabarCita"])
         self.assertEqual(self.enviados["acVerificarCita"]["captcha"], ["123456"])  # captcha junto a los horarios
         self.assertIn("lo que ves en la imagen", self.avisar_con_foto.call_args_list[1].args[0])
         self.assertIn("20/11/2026", self.avisar_con_foto.call_args_list[1].args[0])
@@ -364,6 +367,17 @@ class SitioSimulado(unittest.TestCase):
             run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
         self.assertEqual(self.enviados["acValidarEntrada"]["txtPaisNac"], ["2"])
         self.assertIn("ABC123456", run.DONE.read_text())
+
+    def test_menu_solicitar_sin_citas_no_avisa(self):
+        """El menú «Solicitar Cita» sale también sin citas: hay que pulsarlo y mirar la respuesta."""
+        def entrar(flujo):
+            flujo.page.goto(SITIO + "acEntrada")
+
+        with mock.patch.object(run.Flujo, "entrar", entrar), mock.patch.dict(PAGINAS, {"acCitar": SIN_CITAS}):
+            run.recorrido(self.contexto, CFG, self.mem, solo_revisar=True)
+        self.assertIn("acCitar", self.enviados)  # pulsó Solicitar Cita
+        self.assertEqual([r["r"] for r in self.mem.d["revisiones"]], ["sin_citas"])
+        self.avisar_con_foto.assert_not_called()
 
     def test_sin_citas_tras_aceptar(self):
         def entrar(flujo):

@@ -382,8 +382,9 @@ class Flujo:
 
     # --- 2. Datos del solicitante y comprobación de disponibilidad ---------------------------
     def hay_citas(self) -> bool:
-        """Solo dice que hay citas si ve el menú con «Solicitar Cita». Antes bastaba con no ver el aviso
-        "no hay citas", y un 502 o una sesión caducada pasaban por citas disponibles.
+        """Hay citas solo si, tras pulsar «Solicitar Cita», el sitio no responde "no hay citas". El menú con
+        «Solicitar Cita» sale también sin citas (el usuario lo vio a mano), y antes bastaba con no ver el aviso:
+        un 502, una sesión caducada o ese menú pasaban por citas disponibles.
         La entrada suele llegar ya con el aviso "no hay citas" sobre el formulario, pero Copiar + país + Aceptar
         consulta de nuevo (así apareció una cita en vivo): se hace siempre. Una tercera consulta no se puede: la
         respuesta sin citas no trae el formulario, y ni «atrás» ni abrir de nuevo su dirección lo devuelven."""
@@ -402,11 +403,17 @@ class Flujo:
                 if NO_CITAS in self.texto():
                     return False
                 raise Inesperado("Tras Aceptar la página no dice si hay citas")
+        self.paso = "solicitar"
+        self.pulsar("solicitar", "#btnEnviar")
+        self.foto("solicitar")
+        self.revisar_pagina()
+        if NO_CITAS in self.texto():
+            return False
         self.vio_citas = True
         return True
 
     def menu_citas(self) -> bool:
-        """Pantalla tras Aceptar cuando hay citas: «Solicitar Cita», «Anular Cita»… sin el formulario."""
+        """Menú tras Aceptar: «Solicitar Cita», «Anular Cita»… sin el formulario (sale con o sin citas)."""
         return not self.hay("#txtIdCitado") and (self.hay("#btnEnviar[value*='Solicitar' i]")
                                                   or "solicitar cita" in self.texto())
 
@@ -519,9 +526,6 @@ class Flujo:
         cfg, page = self.cfg, self.page
         page.on("dialog", lambda d: d.accept())
 
-        if "acvalidarentrada" in page.url.lower() and self.hay("#btnEnviar"):   # "Solicitar cita"
-            self.pulsar("solicitar", "#btnEnviar")
-            self.foto("solicitar")
         if self.hay("select#idSede"):                                          # oficina, si la pide
             def oficina():
                 page.select_option("select#idSede", index=0)
@@ -554,9 +558,12 @@ class Flujo:
         self.pulsar("horario", "#btnSiguiente", preparar=horario)
         self.foto("verificar")
 
-        for casilla in ("#chkTotal", "#enviarCorreo"):
-            if self.hay(casilla):
-                page.check(casilla)
+        # «Estoy conforme con la información mostrada» y «Acepto recibir información… en el correo»: todas
+        casillas = page.locator("#chkTotal, #enviarCorreo, input[type=checkbox]")
+        for i in range(casillas.count()):
+            casilla = casillas.nth(i)
+            if casilla.is_visible() and casilla.is_enabled() and not casilla.is_checked():
+                casilla.check()
         self.completar_faltantes()
         self.confirmando = True  # desde aquí no se repite nada: podría duplicar la reserva
         self.pulsar("confirmar", "#btnConfirmar", reintentar=False)
