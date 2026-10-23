@@ -736,6 +736,22 @@ def explicar_error(e: Exception) -> str:
     return texto[:200]
 
 
+def leer_pagina_del_error(flujo: "Flujo", e: Exception) -> Exception:
+    """Un paso que «no respondió a tiempo» a veces sí respondió: con un 429 «Too Many Requests» (bloqueo) o un
+    503 «Service Unavailable» (sitio caído). Antes se esperaba el botón hasta agotar el tiempo sin leer la página,
+    y los dos casos se mezclaban en «no respondió a tiempo»; el agente te preguntaba y una caída del sitio podía
+    acabar aprendida como bloqueo. Devuelve Bloqueado, ErrorDelSitio o el error original."""
+    if isinstance(e, (ErrorDelSitio, SesionCaducada)):
+        return e
+    try:
+        flujo.revisar_bloqueo()
+        flujo.error_del_sitio()
+    except (Bloqueado, ErrorDelSitio) as real:
+        log(f"«{causa_error(e)}» en «{flujo.paso}»: la página decía «{real.frase if isinstance(real, Bloqueado) else real}».")
+        return real
+    return e
+
+
 def causa_error(e: Exception) -> str:
     """Causa corta del error; junto con el paso forma el tipo que se recuerda al responder en Telegram."""
     if isinstance(e, SesionCaducada):
@@ -1096,11 +1112,15 @@ def recorrido(contexto, cfg: dict, mem: Aprendizaje, solo_revisar: bool) -> None
             except Exception as e:  # noqa: BLE001 - se reintenta; el último intento sube a main()
                 flujo.foto("error")
                 n = flujo.n
+                if not flujo.confirmando:
+                    e = leer_pagina_del_error(flujo, e)
+                    if isinstance(e, Bloqueado):
+                        raise e from None
                 # un tipo de error que ya salió 3 veces seguidas no se arregla reintentando: mejor pausar
                 pausar = mem.error_repetido(flujo.paso, causa_error(e), cfg) and not vio_citas
                 if flujo.confirmando or intento == intentos - 1 or pausar:
                     e.paso, e.causa, e.pausar, e.intentos = flujo.paso, causa_error(e), pausar, intento + 1
-                    raise
+                    raise e
                 espera = 0 if vio_citas else cfg.get("espera_reintento_s", 15) * 2 ** intento
                 log(f"Falló en «{flujo.paso}»: {str(e).splitlines()[0][:150]} — reintento "
                     f"{intento + 1}/{intentos - 1}" + (" ya (hay citas)." if vio_citas else f" en {espera} s."))

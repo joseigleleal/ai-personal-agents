@@ -402,6 +402,20 @@ class SitioSimulado(unittest.TestCase):
                 run.recorrido(self.contexto, CFG, self.mem, solo_revisar=False)
         self.avisar_con_foto.assert_not_called()
 
+    def test_paso_que_no_carga_lee_la_pagina(self):
+        """Visto en vivo: «no respondió a tiempo» en inicio era a veces un 429 (bloqueo) y a veces un 503 (caída)."""
+        for cuerpo, esperado in (("<h1>429 Too Many Requests</h1>", run.Bloqueado),
+                                 ("<h1>503 Service Unavailable</h1>", run.ErrorDelSitio)):
+            def entrar(flujo):
+                flujo.paso = "inicio"
+                flujo.page.goto(SITIO + "lento_error")
+                raise TimeoutError("Page.select_option: Timeout 30000ms exceeded.")
+
+            with self.subTest(esperado=esperado.__name__), mock.patch.object(run.Flujo, "entrar", entrar), \
+                    mock.patch.dict(PAGINAS, {"lento_error": f"<html><body>{cuerpo}</body></html>"}):
+                with self.assertRaises(esperado):
+                    run.recorrido(self.contexto, CFG, self.mem, solo_revisar=True)
+
     def test_pagina_desconocida_no_es_hay_citas(self):
         def entrar(flujo):
             flujo.page.goto(SITIO + "otra")

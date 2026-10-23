@@ -254,6 +254,10 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   (así salió una cita en una prueba a mano). Se probó una tercera consulta en la misma sesión y no se puede: la
   respuesta sin citas no trae el formulario (su botón lleva al inicio), y ni «atrás» ni abrir de nuevo su
   dirección lo devuelven.
+- **Un paso que no carga: se lee la página antes de culpar a la lentitud.** Varias veces «no respondió a tiempo»
+  al abrir el inicio era en realidad un 429 «Too Many Requests» (bloqueo) y otras un 503 «Service Unavailable»
+  (sitio caído). Mezclados, el agente preguntaba y una caída podía aprenderse como bloqueo y frenar el ritmo sin
+  motivo. Ahora `leer_pagina_del_error` mira la página del error: 429 → bloqueo directo, 503 → error del sitio.
 - **Hay citas solo si "Solicitar Cita" no responde "no hay citas".** Antes bastaba con no ver "no hay citas", y
   una página de "sesión caducada" pasó por citas disponibles (aviso 🚨 falso). Tampoco basta con ver el menú
   "Solicitar Cita / Consultar / Anular": sale aunque no haya citas, así que el agente lo pulsa y mira la respuesta.
