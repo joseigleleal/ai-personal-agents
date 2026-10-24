@@ -4,6 +4,9 @@ Agentes autónomos de uso personal: trabajan en segundo plano y avisan por Teleg
 revisar. El repo está pensado como **ejemplo para replicar**: cada agente es pequeño, se entiende en una
 lectura y comparte la misma base.
 
+> Antes de usarlo o adaptarlo, lee [Uso responsable](USO_RESPONSABLE.md): para qué es, qué no se debe hacer
+> (acaparar citas, saltarse protecciones de un sitio, postular en masa…) y la seguridad mínima.
+
 ## Agentes
 
 | Agente | Qué hace | Modelo de lenguaje | Frecuencia | Ficha |
@@ -219,3 +222,4 @@ Se trabaja directo en este repo, así que lo personal vive solo en la máquina: 
 (salvo los `.example`) y `data/` están en `.gitignore`. El hook `scripts/hooks/pre-commit` cancela el commit
 si encuentra archivos privados o algo que parezca un secreto (claves de API, tokens, llaves privadas,
 correos). Para frenar también nombres propios, agrégalos uno por línea en `.secret-patterns` (local).
+Las reglas de uso están en [Uso responsable](USO_RESPONSABLE.md).
