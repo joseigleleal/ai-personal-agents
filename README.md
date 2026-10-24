@@ -223,3 +223,8 @@ Se trabaja directo en este repo, así que lo personal vive solo en la máquina: 
 si encuentra archivos privados o algo que parezca un secreto (claves de API, tokens, llaves privadas,
 correos). Para frenar también nombres propios, agrégalos uno por línea en `.secret-patterns` (local).
 Las reglas de uso están en [Uso responsable](USO_RESPONSABLE.md).
+
+## Licencia
+
+[MIT](LICENSE): puedes usarlo, copiarlo y adaptarlo, también con fines comerciales, manteniendo el aviso de
+licencia. Se entrega sin garantía; el uso debe respetar las reglas de [Uso responsable](USO_RESPONSABLE.md).
