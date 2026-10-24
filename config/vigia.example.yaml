@@ -1,8 +1,11 @@
-# Copiar como config/vigia.yaml (fuera de git) y ajustar. El vigía audita a los demás agentes y avisa solo si algo
-# anda mal (con sonido, una vez por problema); cuando se arregla, "resuelto" en silencio.
+# Copiar como config/vigia.yaml (fuera de git) y ajustar. El vigía audita a los demás agentes. Lo grave se avisa al
+# momento (con sonido, una vez por problema; cuando se arregla, "resuelto" en silencio); lo leve va en el parte diario.
 nombre: principal           # con varias VMs, cada mensaje dice de cuál viene (por defecto: el hostname)
 parte_diario_hora: 9      # parte de todos los agentes, una vez al día y sin sonido (vacío = no)
 tablero: true             # un mensaje que se edita en cada vuelta (agentes, CPU, RAM, disco), sin sonido
+# Qué se avisa al momento: clave completa ("cita:quieto"), agente ("sistema": RAM, disco, CPU, servicios) o tipo
+# ("fallo", "detenido"). Lo demás (ej. cita:errores, empleo:quieto) solo en el parte diario, con cuántas veces apareció.
+avisar_al_momento: [sistema, fallo, detenido, cita:quieto]
 
 agentes:
   cita:

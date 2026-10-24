@@ -70,6 +70,19 @@ class Vigia(unittest.TestCase):
         self.assertTrue(tg.call_args_list[1].kwargs["silent"])              # el "resuelto", no
         self.assertEqual(estado["abiertos"], {})
 
+    def test_leve_no_avisa_y_va_al_parte(self):
+        estado = {}
+        with mock.patch.object(run.notify, "telegram", return_value=True) as tg:
+            for problemas in ({"cita:errores": "60 %"}, {"cita:errores": "70 %"}, {}, {"cita:errores": "55 %"}):
+                self.assertEqual(run.avisar_cambios(problemas, estado, AHORA), [])
+        tg.assert_not_called()                                   # ni al aparecer ni al resolverse
+        self.assertEqual(estado["leves"]["cita:errores"]["veces"], 2)  # dos apariciones, no cuatro vueltas
+        self.assertIn("cita:errores: 2 veces desde el 21/10 18:00 (último: 55 %)", run.texto_leves(estado["leves"]))
+        self.assertEqual(run.texto_leves({}), "")
+        self.assertTrue(run.es_grave("sistema:ram", run.GRAVES))
+        self.assertTrue(run.es_grave("empleo:fallo", run.GRAVES))
+        self.assertFalse(run.es_grave("empleo:quieto", run.GRAVES))
+
     def test_disco_lleno_y_cpu_saturada(self):
         uso = mock.Mock(total=100 * 1024 ** 3, used=90 * 1024 ** 3)
         with mock.patch.object(run.shutil, "disk_usage", return_value=uso), \

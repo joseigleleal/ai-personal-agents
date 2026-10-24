@@ -2,7 +2,9 @@
 
 Lee lo que cada agente ya deja en disco (memoria, log, archivos de pausa) y el estado de systemd y del servidor.
 No toca a los agentes ni usa modelo de lenguaje: son reglas concretas en config/vigia.yaml.
-- Un problema nuevo se avisa una vez, con sonido; cuando se arregla, llega "resuelto" en silencio.
+- Un problema grave (`avisar_al_momento`: servidor, servicio caído, cita quieta) se avisa una vez, con sonido;
+  cuando se arregla, llega "resuelto" en silencio. Los leves (ej. % de errores de cita) no avisan: se juntan y van
+  en el parte diario, con cuántas veces aparecieron.
 - En cada vuelta edita un mismo mensaje (el tablero): agentes, CPU, carga, RAM, disco y procesos que más consumen.
 - Si hay un pico (CPU o RAM), avisa qué lo genera con botones para detener cosas de una lista cerrada
   (`picos.acciones`); los botones se atienden en la vuelta siguiente (el timer corre cada 2 min).
@@ -30,6 +32,9 @@ from core import notify
 from core.config import DATA_DIR, ROOT, load_config
 
 ESTADO = DATA_DIR / "vigia.json"
+# Qué se avisa al momento: una entrada vale si es la clave completa ("cita:quieto"), el agente ("sistema") o el tipo
+# ("fallo"). El resto es leve y espera al parte diario.
+GRAVES = ["sistema", "fallo", "detenido", "cita:quieto"]
 MAQUINA = socket.gethostname()  # `nombre:` de la config: con varias VMs, cada mensaje dice de cuál viene
 
 
@@ -361,20 +366,44 @@ def texto_parte(parte: dict, problemas: dict) -> str:
     return "\n".join(lineas)
 
 
-def avisar_cambios(problemas: dict, estado: dict, ahora: datetime) -> list[str]:
-    """Avisa los problemas nuevos (con sonido) y los resueltos (en silencio). Devuelve lo que se avisó."""
+def es_grave(clave: str, graves: list[str]) -> bool:
+    agente, _, tipo = clave.partition(":")
+    return any(g in (clave, agente, tipo) for g in graves)
+
+
+def avisar_cambios(problemas: dict, estado: dict, ahora: datetime, graves: list[str] | None = None) -> list[str]:
+    """Graves: avisa los nuevos (con sonido) y los resueltos (en silencio). Leves: no avisa; cuenta cuántas veces
+    aparecieron para el parte diario (`leves`). Devuelve lo que se avisó."""
+    graves = GRAVES if graves is None else graves
     abiertos, avisos = estado.setdefault("abiertos", {}), []
+    leves, antes = estado.setdefault("leves", {}), set(estado.get("leves_abiertos", []))
     for clave, texto in problemas.items():
+        if not es_grave(clave, graves):
+            l = leves.setdefault(clave, {"veces": 0, "primera": ahora.isoformat(timespec="minutes")})
+            l["veces"] += clave not in antes  # cuenta apariciones, no vueltas
+            l["texto"] = texto
+            continue
         if clave not in abiertos:
             if notify.telegram(f"⚠️ Vigía {MAQUINA} · {clave.split(':')[0]}: {texto}", "vigia"):
                 abiertos[clave] = ahora.isoformat(timespec="minutes")
                 avisos.append(clave)
+    estado["leves_abiertos"] = [c for c in problemas if not es_grave(c, graves)]
     for clave in [c for c in abiertos if c not in problemas]:
         if notify.telegram(f"✅ Vigía {MAQUINA} · {clave.split(':')[0]}: resuelto (desde {abiertos[clave][11:16]})",
                            "vigia", silent=True):
             del abiertos[clave]
             avisos.append(clave)
     return avisos
+
+
+def texto_leves(leves: dict) -> str:
+    """Resumen de los problemas leves desde el último parte (no se avisaron al momento)."""
+    lineas = []
+    for clave, l in leves.items():
+        desde = datetime.fromisoformat(l["primera"])
+        veces = "1 vez" if l["veces"] == 1 else f"{l['veces']} veces"
+        lineas.append(f"\n  · {clave}: {veces} desde el {desde:%d/%m %H:%M} (último: {l.get('texto', '')})")
+    return "\n\nLeves desde el último parte (no avisados al momento):" + "".join(lineas) if lineas else ""
 
 
 def main() -> None:
@@ -391,7 +420,7 @@ def main() -> None:
         print(texto_parte(parte, problemas))
         return
     estado = leer_json(ESTADO)
-    avisos = avisar_cambios(problemas, estado, ahora)
+    avisos = avisar_cambios(problemas, estado, ahora, cfg.get("avisar_al_momento"))
     if cfg.get("picos"):
         avisos += atender_botones(estado, cfg)
         cambio = seguir_pico(medidas, estado, cfg, ahora)
@@ -404,8 +433,9 @@ def main() -> None:
             estado["tablero_msg"] = mid
     hoy, hora = f"{ahora:%Y-%m-%d}", cfg.get("parte_diario_hora", 9)
     if args.parte or (hora is not None and ahora.hour >= int(hora) and estado.get("parte_dia") != hoy):
-        if notify.telegram(texto_parte(parte, problemas), "vigia", silent=True) and not args.parte:
-            estado["parte_dia"] = hoy
+        if notify.telegram(texto_parte(parte, problemas) + texto_leves(estado.get("leves", {})), "vigia",
+                           silent=True) and not args.parte:
+            estado["parte_dia"], estado["leves"] = hoy, {}
     ESTADO.write_text(json.dumps(estado, ensure_ascii=False, indent=1))
     print(f"{ahora:%Y-%m-%d %H:%M} Vigía: {len(problemas)} problema(s) abierto(s)"
           + (f"; avisos: {', '.join(avisos)}" if avisos else ""))

@@ -13,7 +13,7 @@ lectura y comparte la misma base.
 | `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
 | `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
 | `recordatorio` | Envía cada mañana los pendientes de configuración y sus pasos | No | Diario 9:00 | [README](agents/recordatorio/README.md) |
-| `vigia` | Audita a los demás agentes desde afuera (¿revisan a tiempo?, ¿fallan seguido?, ¿se cayó el servicio?) y el servidor (CPU, RAM, disco); avisa solo cuando algo cambia, mantiene un tablero y ante un pico ofrece botones para detener cosas de una lista cerrada | No | 2 min | [README](agents/vigia/README.md) |
+| `vigia` | Audita a los demás agentes desde afuera (¿revisan a tiempo?, ¿fallan seguido?, ¿se cayó el servicio?) y el servidor (CPU, RAM, disco); avisa al momento solo lo grave (lo leve va al parte diario), mantiene un tablero y ante un pico ofrece botones para detener cosas de una lista cerrada | No | 2 min | [README](agents/vigia/README.md) |
 
 ¿Quieres hacer uno propio? → [Cómo crear un agente nuevo](docs/crear-un-agente.md) · [Agentes con LangChain y LangGraph](docs/langgraph.md)
 

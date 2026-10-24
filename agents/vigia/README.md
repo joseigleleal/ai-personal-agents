@@ -1,15 +1,15 @@
 # Agente `vigia` — audita a los demás agentes
 
 **Qué hace:** revisa desde afuera que los otros agentes estén funcionando (que revisen a tiempo, que no fallen
-seguido, que no queden en pausa eterna) y que el servidor tenga disco y memoria. Solo avisa cuando algo anda mal,
-una vez por problema, y manda un parte diario en silencio.
+seguido, que no queden en pausa eterna) y que el servidor tenga disco y memoria. Lo grave (servidor, servicio
+caído, cita quieta) lo avisa al momento, una vez por problema; lo leve lo junta y lo manda en el parte diario.
 
 | | |
 |---|---|
 | Tipo | Reglas sobre archivos de estado, logs y systemd, sin modelo de lenguaje |
 | Frecuencia | Cada 2 min (timer de systemd en el servidor), para atender rápido los botones de los picos |
 | Entradas | `config/vigia.yaml` · memoria y logs de cada agente en `data/` · `systemctl` · disco y RAM |
-| Salidas | Telegram (problema nuevo con sonido; tablero que se edita en cada vuelta, "resuelto" y parte diario en silencio) · `data/vigia.json` · `data/vigia.log` |
+| Salidas | Telegram (problema grave nuevo con sonido; leves solo en el parte; tablero que se edita en cada vuelta, "resuelto" y parte diario en silencio) · `data/vigia.json` · `data/vigia.log` |
 
 ## Flujo
 
@@ -22,8 +22,9 @@ cada 30 min ──▶ por agente: ¿timer encendido? (apagado = detenido a prop�
              ──▶ tablero: edita el mismo mensaje de Telegram con todo lo anterior (sin sonido)
              ──▶ ¿pico? (CPU ≥ 90 % y carga de 1 min alta, o poca RAM) → 🔥 qué lo genera + botones de la lista
                  cerrada (descargar Ollama, detener un proceso, pausar cita); el botón se ejecuta en la vuelta siguiente
-             ──▶ problemas nuevos → ⚠️ con sonido · los que desaparecieron → ✅ en silencio
-             ──▶ una vez al día (parte_diario_hora): 🛰️ parte de todos, en silencio
+             ──▶ problemas graves nuevos → ⚠️ con sonido · los que desaparecieron → ✅ en silencio
+                 problemas leves → sin aviso; se cuentan sus apariciones
+             ──▶ una vez al día (parte_diario_hora): 🛰️ parte de todos + leves del día, en silencio
 ```
 
 ## Cómo funciona por dentro
@@ -32,7 +33,8 @@ cada 30 min ──▶ por agente: ¿timer encendido? (apagado = detenido a prop�
 
 Es un guardia que da una vuelta cada dos minutos. No sabe hacer el trabajo de los otros agentes ni los toca: solo
 mira las huellas que dejan (a qué hora dijeron que volverían a revisar, cuántas veces fallaron, si su servicio se
-cayó) y el estado del servidor. Si algo no cuadra, avisa una sola vez; cuando se arregla, avisa sin hacer ruido.
+cayó) y el estado del servidor. Si algo grave no cuadra, avisa una sola vez; cuando se arregla, avisa sin hacer
+ruido. Lo menor (un rato con muchos errores) no interrumpe: lo cuenta y lo resume en el parte de la mañana.
 Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que algo se detuvo.
 
 ### Detalle técnico (para replicarlo)
@@ -42,7 +44,7 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
 | Archivo | Qué hace | Funciones clave |
 |---|---|---|
 | `agents/vigia/run.py` | Corre los chequeos, avisa cambios y arma el parte | `auditar`, `revisar_servicio`, `revisar_cita`, `revisar_log`, `revisar_sistema`, `avisar_cambios`, `texto_parte` |
-| `config/vigia.example.yaml` | Agentes a vigilar, umbrales y hora del parte | `agentes`, `sistema`, `parte_diario_hora` |
+| `config/vigia.example.yaml` | Agentes a vigilar, umbrales, qué es grave y hora del parte | `agentes`, `sistema`, `avisar_al_momento`, `parte_diario_hora` |
 | `scripts/oracle_vigia.sh` | Lo instala en la VM: bot cifrado con systemd-creds, servicio y timer | — |
 | `tests/test_vigia.py` | Reglas y "avisar una vez" sin red ni systemd | — |
 
@@ -59,10 +61,13 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
    `MemAvailable` de `/proc/meminfo`, `shutil.disk_usage`, `procesos_top` (`ps --sort=-pcpu`) y
    `systemctl is-active` de cada servicio. Solo la carga de 15 min por núcleo (`carga_max_por_nucleo`, 1,5) cuenta
    como problema: un pico mientras un modelo responde es normal.
-5. `avisar_cambios` compara con `data/vigia.json` (`abiertos`: clave → desde cuándo): lo nuevo se avisa con sonido;
-   lo que ya no aparece se avisa "resuelto" en silencio. Solo se guarda si Telegram lo entregó.
+5. `avisar_cambios` separa con `es_grave` (lista `avisar_al_momento`: clave, agente o tipo). Graves: compara con
+   `data/vigia.json` (`abiertos`: clave → desde cuándo); lo nuevo se avisa con sonido y lo que ya no aparece,
+   "resuelto" en silencio (solo se guarda si Telegram lo entregó). Leves: no avisa; en `leves` cuenta cuántas veces
+   apareció cada uno (aparición = no estaba en la vuelta anterior, `leves_abiertos`).
 6. Con `tablero: true`, edita el mismo mensaje con el parte completo (`notify.telegram_estado`, id en `tablero_msg`).
-7. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio (`parte_dia` en el estado).
+7. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio con el resumen de leves
+   (`texto_leves`) y los reinicia (`parte_dia` en el estado).
 
 **Para replicarlo**
 
@@ -102,6 +107,9 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
   no debe generar alarmas; aparece como "detenido" en el parte.
 - **Un aviso por problema:** avisar en cada vuelta sería ruido y se terminaría ignorando. Se avisa al aparecer y al
   resolverse.
+- **Graves al momento, leves al parte:** un umbral que oscila (ej. el % de errores de cita rondando el 50 %) abría y
+  cerraba el problema cada pocos minutos: decenas de avisos al día. Lo que no pide actuar ya va al parte diario con
+  su conteo; al momento solo lo grave (RAM, disco, CPU, servicio caído o un agente que dejó de revisar).
 - **Reglas, no modelo:** son preguntas con respuesta exacta (¿pasó la hora?, ¿qué % falló?). Más adelante se puede
   sumar un resumen con LLM o acciones con aprobación (reiniciar un servicio).
 
