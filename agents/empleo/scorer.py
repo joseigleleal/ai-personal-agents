@@ -165,7 +165,11 @@ def build_prompt(offer: Offer, profile: dict) -> str:
 def score(offer: Offer, profile: dict, prefs: dict, chain) -> dict:
     """Puntúa con la cadena de LangChain (core.llm_lc.json_chain). Devuelve
     {"score", "reason", "notes", "permit", "work_mode", "schedule"}. Si fallan todos los modelos, lanza la excepción."""
-    answer = chain.invoke({"prompt": build_prompt(offer, profile)})
+    return result(chain.invoke({"prompt": build_prompt(offer, profile)}), offer, prefs)
+
+
+def result(answer: dict, offer: Offer, prefs: dict) -> dict:
+    """De la respuesta del modelo al resultado del agente (reglas de compute_score)."""
     value, notes, permit = compute_score(answer, prefs, offer.description.startswith(EMAIL_MARK), offer.title)
     return {"score": value, "reason": answer.get("reason", ""), "notes": notes, "permit": permit,
             "work_mode": answer.get("work_mode", "unknown"), "schedule": answer.get("schedule", "unknown")}

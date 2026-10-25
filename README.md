@@ -24,7 +24,7 @@ lectura y comparte la misma base.
 
 | Experimento | Qué prueba | Ficha |
 |---|---|---|
-| `lora_mlx` | Afinar con LoRA (MLX, en una Mac) un modelo de 1,5B para que extraiga los datos de las ofertas como uno grande en la nube, cuantizarlo y servirlo con Ollama en la Mac o en un servidor sin GPU | En curso · [README](experimentos/lora_mlx/README.md) |
+| `lora_mlx` | Afinar con LoRA (MLX, en una Mac) un modelo de 1,5B para que extraiga los datos de las ofertas como uno grande en la nube, cuantizarlo y servirlo con Ollama en la Mac o en un servidor sin GPU; hoy puntúa en `empleo` con Groq comparando en modo sombra | En uso (modo sombra) · [README](experimentos/lora_mlx/README.md) |
 
 ## Cómo funciona
 
@@ -85,6 +85,7 @@ parezca un secreto.
 | `scripts/run_agent.sh` | Servidor: `git pull --ff-only`, `pip install -r requirements.txt` y corre el agente | — |
 | `scripts/instalar_launchd.sh` | Mac: escribe `~/Library/LaunchAgents/com.agentic.<agente>.plist` con su intervalo o hora y lo carga | `[agente] desinstalar` para quitarlo |
 | `scripts/setup_oracle.sh` | Servidor Ubuntu: paquetes, Ollama si hay 8 GB de RAM o más (si no, swap y Groq), `.venv` y un `.service` + `.timer` de systemd por agente | `install_agent <agente> <intervalo>` |
+| `scripts/oracle_empleo.sh` | Servidor: lleva `empleo` a una VM por SSH (claves cifradas con `systemd-creds`, `.env` sin secretos, Ollama con tope de CPU y memoria, servicio + timer cada 2 h); prueba las fuentes antes de activar | Variables `EMPLEO_SCORER_*` y `EMPLEO_SOMBRA` para elegir modelos |
 | `scripts/estado.sh`, `detener.sh`, `reanudar.sh` | Ver, pausar y volver a cargar los agentes de la lista `AGENTS` y Ollama | — |
 | `scripts/hooks/pre-commit` | Cancela el commit si hay archivos privados o patrones de secretos | Patrones extra en `.secret-patterns` |
 

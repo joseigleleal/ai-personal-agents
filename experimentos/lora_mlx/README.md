@@ -2,8 +2,8 @@
 
 **Qué hace:** entrena con LoRA un modelo de 1,5B parámetros (Qwen2.5-1.5B-Instruct) en una Mac con Apple
 Silicon para que haga la extracción de datos que el agente `empleo` hoy le pide a un modelo grande en la nube
-(Groq gpt-oss-120b). El resultado se cuantiza a 4 bits, se sirve con Ollama en la Mac o en un servidor Linux sin
-GPU y el agente lo puede usar como modelo local.
+(Groq gpt-oss-120b). El resultado se convierte a GGUF, se cuantiza a 5 bits y se sirve con Ollama en la Mac o en un
+servidor Linux sin GPU. Ahí el agente lo usa como puntuador principal, con el modelo grande comparando en modo sombra.
 
 | | |
 |---|---|
@@ -12,15 +12,17 @@ GPU y el agente lo puede usar como modelo local.
 | Entradas | Ofertas guardadas por `empleo` (SQLite) · perfil (`config/profile.yaml`) · `GROQ_API_KEY` |
 | Salidas | `data/lora/`: etiquetas, datos, adaptador, evaluaciones · modelo `empleo-puntuador` en Ollama |
 
-**Estado: en curso.** El código y el flujo están listos y probados con un entrenamiento corto; falta terminar
-de etiquetar el dataset con el maestro, entrenar y publicar aquí los resultados de la evaluación.
+**Estado: en uso, en modo sombra.** Ronda 2 entrenada con 456 ofertas. El modelo q5 corre en un servidor ARM sin
+GPU como puntuador del agente `empleo`, con Groq en paralelo: en los desacuerdos manda Groq, y sus respuestas
+alimentan la próxima ronda (ver [Resultados](#resultados)).
 
 ## Flujo
 
 ```
 ofertas guardadas ──▶ maestro (Groq) responde el mismo JSON que usa el agente ──▶ etiquetas.jsonl
    ──▶ train / valid / test (80/10/10) ──▶ LoRA con mlx-lm (solo se entrena la respuesta)
-   ──▶ evaluación contra el maestro en test ──▶ fusionar + cuantizar (q4_K_M) ──▶ Ollama (Mac o servidor)
+   ──▶ evaluación contra el maestro en test ──▶ fusionar ──▶ GGUF (llama.cpp) ──▶ cuantizar (Q5_K_M) ──▶ Ollama
+   ──▶ agente en modo sombra: el alumno decide, el maestro compara y sus respuestas vuelven a etiquetas.jsonl
 ```
 
 ## Cómo funciona por dentro
@@ -47,7 +49,7 @@ nunca vio si toma las mismas decisiones que el maestro.
 | `dataset.py` | Etiqueta con el maestro (se retoma donde quedó) y separa en train/valid/test | `etiquetar`, `separar` |
 | `lora.yaml` | Configuración del entrenamiento para `mlx_lm lora` | `rank`, `mask_prompt`, `iters`… |
 | `evaluar.py` | Compara al alumno (MLX, con o sin adaptador, u Ollama) contra el maestro en test | `evaluar`, `generador_mlx`, `generador_ollama` |
-| `exportar.sh` | Fusiona, cuantiza y crea el modelo en Ollama; opcional, lo copia a un servidor | `ollama`, `servidor <host>` |
+| `exportar.sh` | Fusiona, convierte a GGUF con llama.cpp, cuantiza y crea el modelo en Ollama; opcional, lo copia a un servidor | `ollama`, `servidor <host>`, `CUANT` |
 | `agents/empleo/scorer.py` | Prompt y reglas de producción que se reutilizan tal cual | `build_prompt`, `SCORER_SYSTEM` |
 
 **Qué es afinar.** Un modelo es una gran cantidad de números (pesos) en matrices, capa tras capa. Entrenar es
@@ -73,8 +75,8 @@ concreta vive en pocas direcciones. El resultado (el **adaptador**) pesa pocos M
 | `num_layers` | -1 | LoRA en todas las capas |
 | `mask_prompt` | true | La pérdida se calcula solo sobre la respuesta: el prompt es entrada, no se aprende |
 | `batch_size` · `grad_accumulation_steps` | 1 · 4 | Lote efectivo de 4 con la memoria de 1 |
-| `iters` · `learning_rate` | 150 · 3e-5 | ~1 pasada sobre 145 ejemplos, con pasos chicos (1e-4 divergió) |
-| `max_seq_length` | 2560 | Prompt + respuesta, en tokens |
+| `iters` · `learning_rate` | 360 · 3e-5 | ~1 pasada sobre los ejemplos, con pasos chicos (1e-4 divergió) |
+| `max_seq_length` | 2560 | Prompt + respuesta, en tokens. `dataset.py --separar` descarta de train/valid lo que no cabe |
 | `grad_checkpoint` | true | Recalcula en vez de guardar: más lento, menos memoria (~6 GB en total) |
 
 **MLX** es la librería de Apple para entrenar en sus chips; usa la memoria unificada (compartida entre CPU y GPU),
@@ -88,10 +90,13 @@ por eso alcanza una Mac de 16 GB.
   reglas del agente y si coincide la decisión de avisar.
 - **Línea base:** el mismo alumno sin LoRA. La diferencia entre base y LoRA es lo que aportó el entrenamiento.
 
-**Llevarlo a producción.** `exportar.sh ollama` fusiona el adaptador (`mlx_lm fuse`) y Ollama importa el modelo
-y lo **cuantiza** a 4 bits (`q4_K_M`): cada peso pasa de 16 bits a ~4 y el modelo baja de ~3 GB a ~1 GB con poca
-pérdida, que se vuelve a medir con `evaluar.py --ollama`. `exportar.sh servidor <host>` copia ese archivo (GGUF) a un
-servidor Linux con Ollama, sin MLX ni Python. En el agente se activa con `EMPLEO_OLLAMA_MODEL`.
+**Llevarlo a producción.** `exportar.sh ollama` fusiona el adaptador (`mlx_lm fuse`), convierte a GGUF en 16 bits
+con el conversor de llama.cpp y lo **cuantiza** con `llama-quantize` (por defecto `Q5_K_M`: cada peso pasa de 16
+bits a ~5 y el modelo baja de ~3 GB a ~1 GB). Las versiones nuevas de Ollama ya no cuantizan al importar
+safetensors, por eso se usa llama.cpp. La pérdida se vuelve a medir con `evaluar.py --ollama`.
+`exportar.sh servidor <host>` copia el GGUF a un servidor Linux con Ollama, sin MLX ni Python. En el agente:
+`EMPLEO_OLLAMA_MODEL` y, para estrenarlo sin riesgo, el modo sombra (`EMPLEO_SOMBRA=groq`, ver la ficha de
+[empleo](../../agents/empleo/README.md)).
 
 ### Adaptarlo a tu caso
 
@@ -121,8 +126,12 @@ servidor Linux con Ollama, sin MLX ni Python. En el agente se activa con `EMPLEO
   memoria, pero con 1,5B no hace falta en 16 GB y la fusión queda más simple.
 - **`mask_prompt`:** el prompt (perfil + oferta) es largo y siempre igual en estructura; la pérdida se calcula solo
   sobre la respuesta, que es lo que se quiere aprender.
-- **Ollama para servir:** importa los safetensors fusionados, cuantiza y corre igual en macOS y en Linux ARM sin GPU.
-  El GGUF resultante (~1 GB) se copia al servidor; allá no hace falta MLX ni Python.
+- **GGUF + Ollama para servir:** llama.cpp convierte y cuantiza una vez en la Mac; Ollama corre el mismo archivo
+  (~1 GB) en macOS y en Linux ARM sin GPU. En el servidor no hace falta MLX ni Python.
+- **Q5_K_M y no Q4_K_M:** pesa 0,1 GB más y mantiene la decisión del modelo en 16 bits; con 4 bits ya se pierden
+  decisiones (ver Resultados).
+- **Modo sombra antes de soltarlo:** el set de prueba es chico (46) y las ofertas reales cambian. Comparar con el
+  maestro en producción mide lo que importa y, de paso, sigue juntando ejemplos etiquetados.
 - **Datos fuera de git:** etiquetas y prompts incluyen el perfil personal; todo queda en `data/lora/`.
 
 ## Uso
@@ -143,8 +152,14 @@ servidor Linux con Ollama, sin MLX ni Python. En el agente se activa con `EMPLEO
 ./experimentos/lora_mlx/exportar.sh ollama
 .venv/bin/python -m experimentos.lora_mlx.evaluar --nombre ollama --ollama empleo-puntuador
 
-# 4. Usarlo en el agente: en .env
+# 4. Usarlo en el agente (.env): el LoRA decide y Groq compara en modo sombra
+EMPLEO_SCORER_BACKEND=ollama
+EMPLEO_SCORER_FALLBACK=groq
 EMPLEO_OLLAMA_MODEL=empleo-puntuador
+EMPLEO_SOMBRA=groq
+
+# 5. Reentrenar con lo que juntó la sombra (traer data/lora/etiquetas.jsonl del servidor si corre allá)
+.venv/bin/python -m experimentos.lora_mlx.dataset --separar      # ¡cambia el set de prueba! comparar con la base otra vez
 ```
 
 ### En un servidor Linux sin GPU (ej. VM ARM de Oracle Cloud)
@@ -184,13 +199,53 @@ Lo que se aprendió en el camino:
   1; en las que el maestro descarta, coincide en todas. Como respaldo local no manda ruido, pero se pierde ofertas
   buenas. La causa principal es que subestima `skill_match` en las ofertas que más encajan.
 
-**Siguiente ronda:** completar las 435 etiquetas, reentrenar con la misma configuración (más pasos) y ver si
-recupera las ofertas buenas; después cuantizar y medir en Ollama.
+**Ronda 2 (2026-10-24)**, con las 456 ofertas etiquetadas: 364 de entrenamiento, 46 de validación y 46 de prueba;
+360 pasos, misma configuración.
+
+| Métrica (46 ofertas de prueba, contra el maestro) | Base, sin LoRA | LoRA (MLX) |
+|---|---|---|
+| JSON válido | 91,3 % | **100 %** |
+| Acierto promedio por campo | 72,2 % | **94,7 %** |
+| Señales de estafa (`red_flags`) | 31,0 % | **89,1 %** |
+| Error medio en `skill_match` (0-10) | 3,52 | **1,33** |
+| Error medio en el puntaje final (0-10) | 3,19 | **0,98** |
+| Misma decisión de avisar | 60,9 % | **87,0 %** |
+| Segundos por oferta (MLX, Mac M4) | 13,8 | 6,6 |
+
+Ya no es conservador: de las 10 ofertas de prueba que el maestro avisaría, el alumno avisa las 10 (en la ronda 1,
+1 de 5). A cambio, avisa 6 de más entre las otras 36.
+
+**Fuera de MLX (GGUF + Ollama):**
+
+| Versión | Misma decisión | `red_flags` | Error de puntaje | Tamaño |
+|---|---|---|---|---|
+| f16 | 87,0 % | 80,4 % | 0,98 | 2,9 GB |
+| Q8_0 | 87,0 % | 80,4 % | 0,98 | 1,5 GB |
+| **Q5_K_M** | **87,0 %** | **82,6 %** | **0,96** | **1,0 GB** |
+| Q4_K_M | 84,8 % | 82,6 % | 1,11 | 0,9 GB |
+| Q5_K_M en el servidor (ARM, 2 núcleos, sin GPU) | 87,0 % | 80,4 % | 0,96 | 21 s por oferta |
+
+La caída en `red_flags` (89 → 80 %) no viene de cuantizar: el GGUF en 16 bits ya la tiene. Se descartó una causa
+por vez. El modelo fusionado en MLX da 89,1 % (no es la fusión). Un GGUF en bf16 da 80,4 % (no es pasar de bf16 a
+f16). Sin `format: json` da lo mismo (no es la gramática de Ollama). Con el prompt armado por el tokenizador de
+Hugging Face da igual, con los mismos tokens (no es la plantilla). Queda la diferencia de cálculo entre MLX y
+llama.cpp: con los mismos pesos, 4 ofertas al límite se deciden distinto. No se corrige con configuración; se mide
+siempre en el motor donde va a correr.
+
+**En producción, en modo sombra (2026-10-25).** Con las primeras 47 ofertas reales, el alumno coincide con el
+maestro en la decisión solo el 38 % de las veces (error de puntaje 3,0): avisaría 28 que el maestro no avisa. Casi
+toda la diferencia está en `skill_match`. Ante puestos técnicos remotos con un stack parecido pero no igual (piden
+React y el perfil es Python), el alumno pone 8 y el maestro, 3. Las señales de estafa coinciden en el 100 %. El set
+de prueba tenía muchas ofertas fáciles (conductores, cocineros), que inflan el 87 %. Por eso el agente no lo deja
+decidir solo: en los desacuerdos manda el maestro, y sus respuestas sobre exactamente estas ofertas difíciles se
+suman al dataset para la ronda 3.
 
 ## Límites
 
 - MLX solo corre en Apple Silicon; en Linux o Windows con NVIDIA, lo equivalente es PEFT/Unsloth con CUDA.
 - El alumno aprende a imitar al maestro, errores incluidos: el techo de calidad es el maestro.
+- Un set de prueba chico y con muchos casos fáciles sobreestima la calidad: hay que medir con datos reales antes
+  de dejar que el modelo decida solo (modo sombra).
 - Unos cientos de ejemplos alcanzan para el formato y los criterios de esta tarea, no para tareas abiertas.
 - Una MacBook Air no tiene ventilador: en entrenamientos largos baja el rendimiento por temperatura.
 - En equipos con antivirus o control de archivos, la primera vez que Python carga una librería grande

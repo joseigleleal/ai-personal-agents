@@ -9,7 +9,9 @@
 #  3. Copia config/empleo.yaml, config/profile.yaml y el historial (data/agentic.db, data/empleo_graph.db) con
 #     permisos 600, y un .env solo con valores no secretos (IMAP_HOST, backends del modelo…).
 #  4. Crea servicio + timer (cada 2 h), prueba las fuentes sin avisar y activa el timer si respondes que sí.
-# El modelo de respaldo se copia aparte: ./experimentos/lora_mlx/exportar.sh servidor <host-ssh>
+# El modelo local se copia aparte: ./experimentos/lora_mlx/exportar.sh servidor <host-ssh>
+# Modelos (por defecto Groq con respaldo Ollama). Modo sombra, con el LoRA decidiendo y Groq comparando:
+#   EMPLEO_SCORER_BACKEND=ollama EMPLEO_SCORER_FALLBACK=groq EMPLEO_SOMBRA=groq ./scripts/oracle_empleo.sh <host-ssh>
 set -euo pipefail
 
 VM="${1:?Uso: $0 <host-ssh>}"
@@ -45,9 +47,10 @@ for f in agentic.db empleo_graph.db; do
 done
 {
   for k in IMAP_HOST IMAP_USER IMAP_FOLDER GROQ_MODEL; do v=$(valor $k); [ -n "$v" ] && echo "$k=$v"; done
-  echo "EMPLEO_SCORER_BACKEND=groq"
-  echo "EMPLEO_SCORER_FALLBACK=ollama"
+  echo "EMPLEO_SCORER_BACKEND=${EMPLEO_SCORER_BACKEND:-groq}"
+  echo "EMPLEO_SCORER_FALLBACK=${EMPLEO_SCORER_FALLBACK:-ollama}"
   echo "EMPLEO_OLLAMA_MODEL=${EMPLEO_OLLAMA_MODEL:-empleo-puntuador}"
+  [ -n "${EMPLEO_SOMBRA:-}" ] && echo "EMPLEO_SOMBRA=$EMPLEO_SOMBRA" && echo "EMPLEO_SOMBRA_MANDA=${EMPLEO_SOMBRA_MANDA:-sombra}"
   echo "OLLAMA_URL=http://127.0.0.1:11434"
 } | ssh_vm "umask 077; cat > $R/.env.empleo"
 ssh_vm "chmod 600 $R/config/empleo.yaml $R/config/profile.yaml $R/data/*.db $R/.env.empleo"

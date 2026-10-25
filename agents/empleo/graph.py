@@ -13,7 +13,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agents.empleo import scorer, sources
+from agents.empleo import scorer, sombra, sources
 from agents.freelance.sources import Offer
 from agents.empleo.report import send_alerts, write_report
 from core import db, llm_lc
@@ -51,6 +51,10 @@ def build(prefs: dict, profile: dict, conn) -> StateGraph:
     score_chain = scorer_model and llm_lc.json_chain(scorer.SCORER_SYSTEM, scorer_model)
     if score_chain:
         score_chain = score_chain.with_config(callbacks=[llm_lc.ClaudeCost(conn, "puntuar_empleo")])
+    # Modo sombra (EMPLEO_SOMBRA=groq): otro modelo puntúa lo mismo por detrás para comparar (agents/empleo/sombra.py)
+    shadow_model = env("EMPLEO_SOMBRA") and llm_lc.chat_model("EMPLEO_SOMBRA", "skip", "EMPLEO_SOMBRA_FALLBACK", conn,
+                                                               json_mode=True, temperature=0, groq_model=env("GROQ_SCORER_MODEL"))
+    shadow_chain = shadow_model and llm_lc.json_chain(scorer.SCORER_SYSTEM, shadow_model)
 
     def recolectar(state: EmpleoState) -> dict:
         offers, errors = sources.collect(prefs, conn)
@@ -88,10 +92,11 @@ def build(prefs: dict, profile: dict, conn) -> StateGraph:
             return {"sin_modelo": "ningún puntuador disponible (EMPLEO_SCORER_BACKEND / SCORER_BACKEND)"}
         pending, chosen, done = list(state["pendientes"]), list(state["elegidas"]), state["puntuadas"]
         threshold = prefs.get("umbral_aviso", 7)
+        score_offer = sombra.Puntuador(conn, profile, prefs, score_chain, shadow_chain)
         for data in pending[: min(BATCH, state["max_puntuar"] - done)]:
             o = Offer(**data)
             try:
-                result = scorer.score(o, profile, prefs, score_chain)
+                result = score_offer(o)
             except Exception as e:  # fallaron el modelo principal y el respaldo: lo que falta queda pendiente
                 print(f"  ⚠️ No se pudo puntuar: {type(e).__name__}: {str(e)[:200]}")
                 return {"pendientes": pending, "elegidas": chosen, "puntuadas": done, "sin_modelo": str(e)[:200]}
@@ -154,6 +159,8 @@ def build(prefs: dict, profile: dict, conn) -> StateGraph:
         print(f"Reporte: {path}")
         if state["avisos"]:
             send_alerts(state["avisos"])
+        if shadow_chain:
+            sombra.informe_semanal(conn)
         return {"reporte": path}
 
     graph = StateGraph(EmpleoState)

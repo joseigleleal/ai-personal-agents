@@ -12,7 +12,7 @@ from unittest import mock
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from agents.empleo import graph, report, scorer
+from agents.empleo import graph, report, scorer, sombra
 from agents.freelance.sources import Offer
 from core import db
 
@@ -131,7 +131,7 @@ class Grafo(unittest.TestCase):
         self.assertIn("sin_modelo", out)
 
     def test_retoma_tras_un_corte(self):
-        real = scorer.score
+        real = scorer.result
         calls = {"n": 0}
 
         def corte(*a, **k):  # se "apaga la Mac" al puntuar la tercera oferta
@@ -141,7 +141,7 @@ class Grafo(unittest.TestCase):
             return real(*a, **k)
 
         with SqliteSaver.from_conn_string(str(self.tmp / "cp.db")) as saver:
-            with mock.patch.object(graph.scorer, "score", side_effect=corte), self.assertRaises(KeyboardInterrupt):
+            with mock.patch.object(graph.scorer, "result", side_effect=corte), self.assertRaises(KeyboardInterrupt):
                 self.run_graph(ANSWERS, saver=saver)
             app = graph.build(PREFS, PROFILE, self.conn).compile(checkpointer=saver)
             snap = app.get_state({"configurable": {"thread_id": "t"}})
@@ -151,6 +151,45 @@ class Grafo(unittest.TestCase):
             self.assertEqual(graph.sources.collect.call_count, 1)  # no vuelve a consultar las fuentes
             self.assertEqual((out["puntuadas"], out["pendientes"]), (4, []))
             self.assertEqual(len(self.sent), 3)
+
+    def run_sombra(self, local, groq, manda="sombra"):
+        models = iter([FakeListChatModel(responses=local), FakeListChatModel(responses=groq), FakeListChatModel(responses=["nota"])])
+        etiquetas = self.tmp / "etiquetas.jsonl"
+        with mock.patch.object(graph.llm_lc, "chat_model", side_effect=lambda *a, **k: next(models)), \
+                mock.patch.dict("os.environ", {"EMPLEO_SOMBRA": "groq", "EMPLEO_SOMBRA_MANDA": manda}), \
+                mock.patch.object(sombra, "ETIQUETAS", etiquetas), \
+                mock.patch.object(sombra.notify, "telegram", return_value=True) as tg:
+            out = graph.build(PREFS, PROFILE, self.conn).compile().invoke({"max_puntuar": 60, "pendientes": []})
+        filas = {f["offer_id"]: f for f in self.conn.execute("SELECT * FROM sombra")}
+        return out, filas, etiquetas, tg
+
+    def test_sombra_manda_en_desacuerdo_y_realimenta(self):
+        # Local: 8 al part-time (avisa) y 2 a los demás; sombra: 2 al part-time y 9 al full-time
+        local = [answer(schedule="part_time", skill_match=8), answer(skill_match=2), answer(contract_type="contractor", skill_match=2),
+                 answer(skill_match=2)]
+        extra = {c: None for c in sombra.CAMPOS if c not in BASE}  # respuesta completa: sirve para reentrenar
+        groq = [answer(schedule="part_time", skill_match=1, **extra), answer(skill_match=9, **extra),
+                answer(contract_type="contractor", skill_match=2, **extra), answer(skill_match=2)]
+        out, filas, etiquetas, tg = self.run_sombra(local, groq)
+        self.assertEqual(out["puntuadas"], 4)
+        self.assertEqual(filas["jobicy:1"]["manda"], "sombra")       # el local avisaba y Groq no: manda Groq
+        self.assertEqual(filas["jobicy:2"]["manda"], "sombra")       # Groq avisaba y el local no
+        self.assertEqual(filas["jobicy:3"]["manda"], "principal")    # coinciden
+        self.assertEqual([e["title"] for e in out["elegidas"]], ["Senior python full-time"])
+        self.assertEqual(len(etiquetas.read_text().strip().split("\n")), 3)  # la 4.ª respuesta de Groq vino incompleta
+        informe = tg.call_args[0][0]
+        self.assertIn("comparadas con Groq: 4", informe)
+        self.assertIn("solo Groq: 1", informe)
+
+    def test_sin_sombra_queda_pendiente_o_decide_el_local(self):
+        local = [answer(schedule="part_time", skill_match=8)] * 4
+        out, filas, _, _ = self.run_sombra(local, ["no es json"])
+        self.assertEqual((out["puntuadas"], len(out["pendientes"])), (0, 4))  # mientras manda Groq, sin Groq no se decide
+        self.assertIn("sin_modelo", out)
+        self.conn.execute("DELETE FROM offers")
+        out, filas, _, _ = self.run_sombra(local, ["no es json"], manda="principal")
+        self.assertEqual(out["puntuadas"], 4)
+        self.assertIsNone(filas["jobicy:1"]["puntaje_s"])           # decidió el local, sin comparar
 
     def tearDown(self):
         self.conn.close()

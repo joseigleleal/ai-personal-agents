@@ -62,6 +62,7 @@ Decide solo qué anuncios mirar, qué nota ponerles y cuáles avisar. Postular, 
 | `agents/empleo/sources.py` | Fuentes (APIs, RSS, IMAP) y turnos por fuente | `collect()`, `adzuna()`, `email_alerts()`, `_api_turn()` |
 | `agents/empleo/scorer.py` | Pre-filtro, prompt, reglas de puntaje y grupo del permiso | `prefilter()`, `score()`, `compute_score()`, `permit_fit()`, `PERMITS` |
 | `agents/empleo/report.py` | Reporte Markdown del día y avisos | `write_report()`, `send_alerts()` |
+| `agents/empleo/sombra.py` | Modo sombra: un segundo modelo puntúa lo mismo, se registra el acuerdo y alimenta el dataset del LoRA | `Puntuador`, `informe()`, `informe_semanal()`, tabla `sombra` |
 | `core/llm_lc.py` | Modelos LangChain con respaldo y registro de costo | `chat_model()`, `json_chain()`, `text_chain()`, `ClaudeCost` |
 | `core/db.py`, `core/notify.py` | SQLite compartida y Telegram (respaldo: aviso de macOS) | `insert_offer()`, `alert_once()`, `telegram()` |
 
@@ -118,7 +119,7 @@ La clase `Offer` (fuente, id externo, título, url, descripción, salario, `appl
   `langchain-core`, `langchain-ollama`, `langchain-groq`, `langchain-anthropic`, `requests`, `certifi`, `pyyaml`).
 - Modelo: Ollama local, Groq (plan gratis) o Claude; basta uno. Telegram es opcional.
 - `.env` por nombre: `EMPLEO_SCORER_BACKEND`, `EMPLEO_SCORER_FALLBACK`, `EMPLEO_OLLAMA_MODEL` (o los generales
-  `SCORER_BACKEND`, `SCORER_FALLBACK`), `WRITER_BACKEND`, `WRITER_FALLBACK`, `OLLAMA_URL`, `OLLAMA_MODEL`,
+  `SCORER_BACKEND`, `SCORER_FALLBACK`), `EMPLEO_SOMBRA`, `EMPLEO_SOMBRA_MANDA`, `WRITER_BACKEND`, `WRITER_FALLBACK`, `OLLAMA_URL`, `OLLAMA_MODEL`,
   `GROQ_API_KEY`, `GROQ_MODEL`, `GROQ_SCORER_MODEL`, `ANTHROPIC_API_KEY`, `MONTHLY_BUDGET_USD`,
   `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `INFOJOBS_CLIENT_ID`, `INFOJOBS_CLIENT_SECRET`, `IMAP_HOST`, `IMAP_USER`,
   `IMAP_PASSWORD`, `IMAP_FOLDER`, `TELEGRAM_BOT_TOKEN[_EMPLEO]`, `TELEGRAM_CHAT_ID[_EMPLEO]`.
@@ -157,8 +158,20 @@ La clase `Offer` (fuente, id externo, título, url, descripción, salario, `appl
 - **Ofertas con pocos datos** (solo título y ciudad, típico de las alertas): tope de 8 y "revísalo en el anuncio".
 - **Modelo propio por agente:** `EMPLEO_SCORER_BACKEND=groq` con respaldo `ollama` (`with_fallbacks`),
   temperatura 0 para que el mismo anuncio dé el mismo resultado.
-  Con `EMPLEO_OLLAMA_MODEL` el respaldo local puede ser un modelo chico afinado para esta tarea
+  Con `EMPLEO_OLLAMA_MODEL` el modelo local puede ser uno chico afinado para esta tarea
   (ver [experimento LoRA con MLX](../../experimentos/lora_mlx/README.md)).
+- **Modo sombra para pasar a un modelo local sin perder ofertas.** Un modelo afinado mide bien en una prueba fija,
+  pero las ofertas reales cambian. Con `EMPLEO_SOMBRA=groq`, el local puntúa y Groq puntúa lo mismo por detrás:
+  - cada oferta queda en la tabla `sombra` (puntajes, si avisaría cada uno, señales de estafa, segundos);
+  - cuando uno avisaría y el otro no, manda Groq (`EMPLEO_SOMBRA_MANDA=sombra`) hasta que el local demuestre que
+    acierta; con `=principal` decide siempre el local;
+  - cada respuesta de Groq se agrega a `data/lora/etiquetas.jsonl`: el próximo entrenamiento aprende de ofertas
+    nuevas;
+  - si Groq llega a su tope diario, decide el local y la oferta queda sin comparar;
+  - una vez por semana llega por Telegram el acuerdo entre los dos y los desacuerdos.
+
+  Groq gratis no alcanza para comparar todo (unas 90 ofertas al día), pero sí para una muestra grande. Cuando el
+  acuerdo sea alto varias semanas, se apaga la sombra y el agente queda sin depender de la nube.
 
 ## Uso
 

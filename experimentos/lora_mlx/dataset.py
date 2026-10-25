@@ -11,6 +11,9 @@ import argparse
 import json
 import random
 import time
+from pathlib import Path
+
+import yaml
 
 from agents.empleo import scorer
 from agents.freelance.sources import Offer
@@ -37,7 +40,7 @@ def ofertas() -> list[Offer]:
 def etiquetadas() -> set[str]:
     if not ETIQUETAS.exists():
         return set()
-    return {json.loads(l)["id"] for l in ETIQUETAS.read_text().splitlines() if l.strip()}
+    return {json.loads(l)["id"] for l in ETIQUETAS.read_text().split("\n") if l.strip()}
 
 
 def etiquetar(maestro: str, limite: int | None) -> None:
@@ -68,22 +71,42 @@ def etiquetar(maestro: str, limite: int | None) -> None:
         print(f"  {i}/{len(pendientes)} {o.title[:70]}")
 
 
+def mensajes(r: dict) -> list[dict]:
+    return [{"role": "system", "content": scorer.SCORER_SYSTEM},
+            {"role": "user", "content": r["prompt"]},
+            {"role": "assistant", "content": json.dumps(r["respuesta"], ensure_ascii=False)}]
+
+
+def caben(filas: list[dict]) -> list[dict]:
+    """Solo los ejemplos que entran enteros en `max_seq_length` de lora.yaml. mlx-lm recorta los más largos por el
+    final, y con `mask_prompt` el recorte se come la respuesta: la pérdida queda 0/0 = nan y arruina el entrenamiento
+    (pasó en la ronda 2)."""
+    from transformers import AutoTokenizer  # viene con mlx-lm; solo hace falta al separar
+    cfg = yaml.safe_load((Path(__file__).parent / "lora.yaml").read_text())
+    tok = AutoTokenizer.from_pretrained(cfg["model"])
+    def largo(r: dict) -> int:  # las versiones nuevas de transformers devuelven un dict, no la lista de tokens
+        return len(tok.apply_chat_template(mensajes(r), tokenize=True, return_dict=True)["input_ids"])
+    return [r for r in filas if largo(r) <= cfg["max_seq_length"]]
+
+
 def separar(semilla: int = 7) -> None:
     """80 % entrenamiento, 10 % validación (para ver si sobreajusta), 10 % prueba (solo para evaluar al final).
-    Formato `messages` de mlx-lm: el mismo system y mensaje que usa el agente, y la respuesta del maestro."""
-    filas = [json.loads(l) for l in ETIQUETAS.read_text().splitlines() if l.strip()]
+    Formato `messages` de mlx-lm: el mismo system y mensaje que usa el agente, y la respuesta del maestro.
+    En entrenamiento y validación se descartan los ejemplos que no caben; prueba queda igual (evaluar no recorta)."""
+    filas = [json.loads(l) for l in ETIQUETAS.read_text().split("\n") if l.strip()]
     random.Random(semilla).shuffle(filas)
     n = len(filas)
     cortes = {"train": filas[: int(n * 0.8)], "valid": filas[int(n * 0.8): int(n * 0.9)], "test": filas[int(n * 0.9):]}
+    for nombre in ("train", "valid"):
+        antes = len(cortes[nombre])
+        cortes[nombre] = caben(cortes[nombre])
+        if len(cortes[nombre]) < antes:
+            print(f"{nombre}: descarto {antes - len(cortes[nombre])} ejemplos más largos que max_seq_length")
     DATOS.mkdir(parents=True, exist_ok=True)
     for nombre, grupo in cortes.items():
         with (DATOS / f"{nombre}.jsonl").open("w") as f:
             for r in grupo:
-                f.write(json.dumps({"id": r["id"], "messages": [
-                    {"role": "system", "content": scorer.SCORER_SYSTEM},
-                    {"role": "user", "content": r["prompt"]},
-                    {"role": "assistant", "content": json.dumps(r["respuesta"], ensure_ascii=False)},
-                ]}, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"id": r["id"], "messages": mensajes(r)}, ensure_ascii=False) + "\n")
         print(f"{nombre}: {len(grupo)} ejemplos")
 
 

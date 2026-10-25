@@ -59,7 +59,7 @@ def datos_oferta(prompt: str) -> tuple[str, bool]:
 
 
 def evaluar(responder, prefs: dict, limite: int | None) -> dict:
-    ejemplos = [json.loads(l) for l in (DATOS / "test.jsonl").read_text().splitlines() if l.strip()][:limite]
+    ejemplos = [json.loads(l) for l in (DATOS / "test.jsonl").read_text().split("\n") if l.strip()][:limite]
     umbral = prefs.get("umbral_aviso", 7)
     validos, aciertos, dif_skill, dif_puntaje, misma_decision, tiempos = 0, {c: 0 for c in EXACTOS}, [], [], 0, []
     for i, ej in enumerate(ejemplos, 1):
