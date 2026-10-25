@@ -2,7 +2,7 @@
 # Programa un agente con launchd (macOS).
 # Uso:   ./scripts/instalar_launchd.sh [agente]              -> instala (por defecto: freelance)
 #        ./scripts/instalar_launchd.sh [agente] desinstalar
-# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 2 h) · cita (lanza cada 1 min; el ritmo de revisión lo aprende el agente) · recordatorio (diario, a las 9:00) · vigia (cada 2 min)
+# Agentes: freelance (cada 2 h) · fx (cada 4 h) · empleo (cada 2 h) · cita (lanza cada 1 min; el ritmo de revisión lo aprende el agente) · recordatorio (diario, a las 9:00) · vigia (cada 2 min) · eco (no se programa: a pedido)
 set -e
 
 AGENT="${1:-freelance}"
@@ -13,7 +13,8 @@ case "$AGENT" in
   cita)      INTERVAL=60 ;;    # el agente decide si toca según el ritmo que aprendió (1-30 min)
   recordatorio) HOUR=9 ;;
   vigia)     INTERVAL=120 ;;  # audita a los demás; en el servidor va con scripts/oracle_vigia.sh
-  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo, cita, recordatorio, vigia)"; exit 1 ;;
+  eco)       echo "eco no se programa: se usa a pedido (python -m agents.eco.run --sugerir …)."; exit 0 ;;
+  *) echo "Agente desconocido: $AGENT (opciones: freelance, fx, empleo, cita, recordatorio, vigia, eco)"; exit 1 ;;
 esac
 
 LABEL="com.agentic.$AGENT"

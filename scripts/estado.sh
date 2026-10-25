@@ -36,6 +36,11 @@ if [ -x .venv/bin/python ]; then  # empleo usa LangGraph: estado guardado del gr
   printf "    empleo (LangGraph): %s\n" "$(.venv/bin/python -m agents.empleo.run --estado 2>&1 | tail -1)"
 fi
 
+if [ -f data/eco.nosync/turnos.jsonl ]; then  # eco no se programa: se usa a pedido
+  printf "    eco (a pedido): índice con %s turnos, armado %s\n" "$(grep -c . data/eco.nosync/turnos.jsonl)" \
+    "$(since data/eco.nosync/turnos.jsonl)"
+fi
+
 title "Reintento de VMs en Oracle"
 copies="$(pgrep -f "^/bin/bash ./scripts/oracle_crear_vm.sh" | while read -r p; do
   [ "$(ps -o ppid= -p "$p" | tr -d ' ')" = "1" ] && echo "$p"; done)"

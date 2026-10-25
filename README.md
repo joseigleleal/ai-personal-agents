@@ -12,6 +12,7 @@ lectura y comparte la misma base.
 | Agente | Qué hace | Modelo de lenguaje | Frecuencia | Ficha |
 |---|---|---|---|---|
 | `cita` | Busca y reserva cita previa de extranjería (toma de huellas) entrando con certificado digital; reintenta los pasos que fallan, aprende a qué horas aparecen citas y qué tan seguido puede consultar, y responde comandos por Telegram (estado, informes, capturas) | No (navegador con Playwright) | Aprendida: 1–30 min | [README](agents/cita/README.md) |
+| `eco` | Sugiere cómo responderías tú un mensaje, imitando tu forma de escribir aprendida de tus chats (uno a uno, sin los del trabajo). Todo local; nunca envía nada | Sí, local (Ollama): embeddings + modelo que redacta | A pedido | [README](agents/eco/README.md) |
 | `empleo` | Junta ofertas de empleo en España, las puntúa con reglas personales (incluido el límite de horas del permiso de trabajo) y avisa las mejores. **Piloto con LangGraph** | Sí, para extraer datos y redactar notas | 2 h | [README](agents/empleo/README.md) |
 | `freelance` | Busca proyectos freelance y redacta borradores de propuesta | Sí, para puntuar y redactar | 2 h | [README](agents/freelance/README.md) |
 | `fx` | Avisa cuando la tasa EUR → COP está barata frente a los últimos 90 días | No | 4 h | [README](agents/fx/README.md) |
