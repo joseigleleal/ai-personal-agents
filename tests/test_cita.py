@@ -244,6 +244,21 @@ class Memoria(unittest.TestCase):
         self.assertEqual((self.mem.intervalo(cfg), self.mem.piso(cfg)), (120, 120))  # antes: 120 → 299 s
         self.assertEqual(self.mem.pausa_min(cfg), 5)  # pero pausa igual
 
+    def test_alternar_rutas_y_compararlas(self):
+        cfg = {"acceso": "alternar"}
+        self.assertEqual(run.elegir_acceso(cfg, self.mem), "clave")  # sin historial: empieza por Cl@ve
+        for ruta, resultado, segundos in (("clave", "sin_citas", 40), ("sin_clave", "sin_citas", 10),
+                                          ("clave", "error", 90), ("sin_clave", "sin_citas", 12)):
+            self.mem.acceso, self.mem.t0 = ruta, run.time.time() - segundos
+            self.mem.revision(resultado, "tramite" if resultado == "error" else None, causa="x")
+        self.assertEqual(run.elegir_acceso(cfg, self.mem), "clave")  # la última fue sin Cl@ve
+        self.assertEqual(run.elegir_acceso({"acceso": "sin_clave"}, self.mem), "sin_clave")
+        with mock.patch.dict(run.os.environ, {"CITA_ACCESO": "clave"}):
+            self.assertEqual(run.elegir_acceso(cfg, self.mem), "clave")
+        informe = self.mem.informe()
+        self.assertIn("con Cl@ve: 2 rev · completas 50 % · error 50 % · bloqueos 0 · tarda 40 s", informe)
+        self.assertIn("sin Cl@ve: 2 rev · completas 100 % · error 0 % · bloqueos 0 · tarda 11 s", informe)
+
     def test_errores_seguidos_e_informe(self):
         self.mem.revision("sin_citas")
         for _ in range(3):

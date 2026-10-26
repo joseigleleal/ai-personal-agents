@@ -37,6 +37,8 @@ espera_captcha_min: 3           # junto a los horarios te manda el captcha por T
 espera_dato_min: 4              # si el formulario pide un dato que no está aquí, te lo pregunta por Telegram y espera esto
 historial_dias: 14              # capturas de cada revisión en data/cita/historial/ (se piden con /ver por Telegram)
 
+# Cómo entrar: clave (certificado en Cl@ve), sin_clave («Presentación sin Cl@ve»: NIE, nombre y país) o alternar (una y una, para compararlas en /informe)
+acceso: clave
 # Datos del solicitante. Con Cl@ve el NIE y el nombre suelen venir rellenados.
 nie: ""
 nombre: ""

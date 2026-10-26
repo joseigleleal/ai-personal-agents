@@ -27,6 +27,8 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
 import json
 import os
 import random
+import statistics
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,6 +46,9 @@ RITMO = {"minimo_s": 60, "maximo_s": 1800, "inicial_s": 600, "baja_s": 30, "sube
 
 
 class Aprendizaje:
+    acceso: str | None = None  # ruta de acceso de la revisión en curso: clave | sin_clave (la fija run.py)
+    t0: float = 0.0           # cuándo empezó la revisión en curso
+
     def __init__(self, ruta: Path):
         self.ruta = ruta
         try:
@@ -121,6 +126,8 @@ class Aprendizaje:
         """resultado: sin_citas | hay_citas | reservada | error | bloqueo. Ajusta el ritmo según cómo fue.
         causa: en un error, qué pasó en pocas palabras (junto con el paso forma el tipo de error)."""
         r = {"t": f"{datetime.now():%Y-%m-%dT%H:%M}", "r": resultado, "cada_s": self.intervalo(cfg)}
+        if self.acceso:  # por dónde entró (clave | sin_clave) y cuánto tardó: para comparar las rutas
+            r["ruta"], r["s"] = self.acceso, round(time.time() - self.t0)
         if paso:
             r["paso"] = paso
         if causa:
@@ -436,4 +443,24 @@ class Aprendizaje:
         bloqueos = [r["t"][11:] for r in revs if r["r"] == "bloqueo"]
         if bloqueos:
             lineas.append("Bloqueos: " + ", ".join(bloqueos))
+        lineas += self.comparar_rutas(revs)
         return "\n".join(lineas)
+
+    @staticmethod
+    def comparar_rutas(revs: list[dict]) -> list[str]:
+        """Con `acceso: alternar`: por ruta, cuántas revisiones, % completas, % con error, bloqueos y la mediana de
+        segundos de las completas (cuánto tarda en saber si hay citas)."""
+        rutas = sorted({r["ruta"] for r in revs if r.get("ruta")})
+        if not rutas:
+            return []
+        lineas = ["Por ruta de acceso:"]
+        for ruta in rutas:
+            rs = [r for r in revs if r.get("ruta") == ruta]
+            ok = [r for r in rs if r["r"] in ("sin_citas", "hay_citas", "reservada")]
+            errores = sum(r["r"] == "error" for r in rs)
+            bloq = sum(r["r"] == "bloqueo" for r in rs)
+            seg = f"{statistics.median(r['s'] for r in ok):.0f} s" if ok else "—"
+            nombre = "con Cl@ve" if ruta == "clave" else "sin Cl@ve"
+            lineas.append(f"  • {nombre}: {len(rs)} rev · completas {len(ok) * 100 // len(rs)} % · error "
+                          f"{errores * 100 // len(rs)} % · bloqueos {bloq} · tarda {seg}")
+        return lineas

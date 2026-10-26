@@ -340,6 +340,10 @@ class Flujo:
         self.foto("tramite")
         self.pulsar("tramite", "#btnAceptar", preparar=self.elegir_tramite)
         self.foto("info")
+        if cfg.get("acceso", "clave") == "sin_clave":  # «Presentación sin Cl@ve»: NIE, nombre y país, sin certificado
+            self.pulsar("acceso_sin_clave", "#btnEntrar")
+            self.foto("entrada")
+            return
         self.pulsar("acceso_clave", "#btnAccesoClave", "input[value*='Cl@ve' i]", "button:has-text('Cl@ve')")
         self.foto("clave")
         self.paso = "certificado"
@@ -666,11 +670,21 @@ def fijar_ip(ip: str | None) -> None:
         os.environ["NODE_OPTIONS"] = f"--require {Path(__file__).with_name('fijar_ip.cjs')}"
 
 
+def elegir_acceso(cfg: dict, mem: Aprendizaje) -> str:
+    """clave | sin_clave. Con `acceso: alternar`, una revisión por cada ruta (la contraria a la última), para comparar
+    cuál tarda menos y falla menos con la misma IP, a las mismas horas y al mismo ritmo. CITA_ACCESO manda (pruebas)."""
+    acceso = os.environ.get("CITA_ACCESO") or cfg.get("acceso", "clave")
+    if acceso != "alternar":
+        return acceso
+    ultima = next((r["ruta"] for r in reversed(mem.d["revisiones"]) if r.get("ruta")), None)
+    return "sin_clave" if ultima == "clave" else "clave"
+
+
 def lanzar(p, cfg: dict, ip: str | None):
     opciones = {"locale": "es-ES", "viewport": {"width": 1280, "height": 900}}
     cert = cfg.get("certificado") or {}
     archivo = ROOT / cert.get("archivo", "data/cita/certificado.p12")
-    if archivo.exists():
+    if archivo.exists() and cfg.get("acceso", "clave") != "sin_clave":  # sin Cl@ve no se usa el certificado
         clave = env("CITA_CERT_PASSWORD") or ""
         opciones["client_certificates"] = [
             {"origin": o, "pfxPath": str(archivo), "passphrase": clave} for o in cert.get("origenes", [])
@@ -714,7 +728,7 @@ def nueva_pagina(contexto) -> Page:
 PASOS = {  # qué hace cada paso, para que los avisos de error se entiendan sin leer el código
     "conexion": "conectar con el sitio de citas", "inicio": "abrir la página de inicio",
     "provincia": "elegir la provincia", "oficina": "elegir la oficina", "tramite": "elegir el trámite",
-    "acceso_clave": "entrar a Cl@ve", "certificado": "identificarse con el certificado en Cl@ve",
+    "acceso_clave": "entrar a Cl@ve", "acceso_sin_clave": "entrar sin Cl@ve", "certificado": "identificarse con el certificado en Cl@ve",
     "vuelta_clave": "volver de Cl@ve al sitio de citas", "entrada": "ver si hay citas",
     "datos": "llenar tus datos",
     "solicitar": "pedir la cita", "contacto": "poner teléfono y correo",
@@ -1170,7 +1184,10 @@ def main() -> None:
     for f in SHOTS.glob("*.*"):
         f.unlink()
     inicio = f"{datetime.now():%Y-%m-%dT%H:%M}"
-    log("Revisión" + (" (modo fantasma, sin ventana)" if cfg.get("headless", True) else " (con ventana)"))
+    cfg = {**cfg, "acceso": elegir_acceso(cfg, mem)}
+    mem.acceso, mem.t0 = cfg["acceso"], time.time()
+    log("Revisión" + (" (modo fantasma, sin ventana)" if cfg.get("headless", True) else " (con ventana)")
+        + f" · {'con' if cfg['acceso'] == 'clave' else 'sin'} Cl@ve")
     try:
         try:
             ip = ip_alcanzable(ICP_HOST)

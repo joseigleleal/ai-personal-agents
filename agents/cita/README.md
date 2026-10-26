@@ -1,7 +1,9 @@
 # Agente `cita` — cita previa de extranjería (toma de huellas)
 
 **Qué hace:** revisa cada pocos minutos (el ritmo lo aprende: de 1 a 30 min) si hay citas para la toma de huellas (TIE) en la web de cita previa
-de extranjería, entrando con certificado digital por Cl@ve. Si hay, **reserva la primera** y avisa.
+de extranjería, entrando con certificado digital por Cl@ve (o, con `acceso: sin_clave`, por «Presentación sin
+Cl@ve» con NIE, nombre y país: sirve si Cl@ve deja de ofrecer el certificado; con `acceso: alternar` usa una y
+una, y `/informe` compara cuál tarda menos y falla menos). Si hay, **reserva la primera** y avisa.
 Si un paso falla, reintenta; y aprende de cada revisión (qué pasos tardan, qué botón funcionó, a qué
 horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para ajustar esperas y ritmo.
 
