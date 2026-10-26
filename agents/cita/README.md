@@ -1,6 +1,6 @@
 # Agente `cita` — cita previa de extranjería (toma de huellas)
 
-**Qué hace:** revisa cada pocos minutos (el ritmo lo aprende: de 1 a 30 min) si hay citas para la toma de huellas (TIE) en la web de cita previa
+**Qué hace:** revisa cada pocos minutos (el ritmo lo aprende, entre un mínimo que tú fijas y 30 min) si hay citas para la toma de huellas (TIE) en la web de cita previa
 de extranjería, entrando con certificado digital por Cl@ve (o, con `acceso: sin_clave`, por «Presentación sin
 Cl@ve» con NIE, nombre y país: sirve si Cl@ve deja de ofrecer el certificado; con `acceso: alternar` usa una y
 una, y `/informe` compara cuál tarda menos y falla menos). Si hay, **reserva la primera** y avisa.
@@ -198,6 +198,10 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   queda como **piso aprendido**: no vuelve a bajar de ahí. Si lo bloquean otra vez estando en el piso, el piso
   sube otro escalón (1 → 1,2 → 1,44 → 1,73 min…), hasta dar con un ritmo que el sitio acepte. Sin piso, bajar
   a 1 min y pagar cada «429 Too Many Requests» con una pausa solo repetía el choque cada 20-30 min.
+- **Un mínimo elegido con datos, no a ojo.** El código acepta bajar hasta 1 min, pero con unas 1800 revisiones
+  guardadas se vio que por debajo de 4 min el sitio falla en ~28-30 % de las revisiones (y ahí ocurrieron 41 de
+  51 bloqueos), y a 4 min o más, en ~17 %. Revisar más seguido no daba más revisiones útiles: más errores y más
+  pausas. Por eso conviene `minimo_s: 240`; el historial (`--aprendizaje` y `/informe`) permite repetir la cuenta.
   El piso **baja suave**: cada `ritmo.horas_baja_piso` (2) sin bloqueos confirmados baja `ritmo.baja_piso_s`
   (12 s): 3,0 → 2,8 → 2,6 min… Así vuelve a probar el límite poco a poco; antes el piso duraba 7 días entero y
   al caducar el ritmo saltaba de golpe al mínimo, justo lo que había provocado los bloqueos. Con
@@ -281,7 +285,8 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   bad gateway», «acceso_clave | no respondió a tiempo»). Lo que respondas con los botones vale para ese
   tipo: si dijiste "error normal", los siguientes de ese tipo quedan en el log y el historial sin avisar ni
   preguntar; si dijiste "fue bloqueo", los siguientes pausan sin preguntar. Si van 3 revisiones seguidas con
-  error, avisa igual (algo más serio puede estar pasando).
+  error, avisa igual, una sola vez por racha (algo más serio puede estar pasando; antes avisaba en cada
+  revisión siguiente cuyo error tuviera otro texto).
   - **La misma causa en otro paso no vuelve a preguntar:** «requested url was rejected» al entrar o al elegir
     el trámite es el mismo error; vale la respuesta que ya diste (si diste respuestas distintas según el paso,
     pregunta).
@@ -301,7 +306,7 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   | Comando | Qué hace |
   |---|---|
   | `/estado` | última revisión, pausa, próxima revisión, resumen de 24 h |
-  | `/informe [horas]` | resultados, % de revisiones completas, errores por tipo, citas vistas, bloqueos |
+  | `/informe [horas]` | resultados, % de revisiones completas, errores por tipo, citas vistas, bloqueos y, con `acceso: alternar`, cada ruta comparada (completas, errores, bloqueos, segundos) |
   | `/aprendido` | lo mismo que `--aprendizaje`: ritmo, piso, bloqueos, tipos de error |
   | `/captura` | la última pantalla vista |
   | `/historial [n]` · `/ver HH:MM [AAAA-MM-DD]` | revisiones guardadas (no "sin citas") y sus capturas en un álbum |
