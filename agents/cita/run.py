@@ -1218,7 +1218,7 @@ def main() -> None:
                            f"que eso es un bloqueo. {que}")
                 elif conocido == "normal" and not reservando and seguidos < 3:
                     log(f"Error «{causa}» en «{paso}»: lo marcaste como normal; no aviso.")
-                elif error_nuevo(str(e)) or (conocido and seguidos == 3):
+                elif (conocido and seguidos == 3) or (not conocido and error_nuevo(str(e))):  # conocido: 1 aviso por racha
                     avisar(f"⚠️ {datetime.now():%H:%M} Cita: esta revisión no se pudo completar "
                            f"(probé {intentos} {'vez' if intentos == 1 else 'veces'}).\n"
                            f"Dónde: al {PASOS.get(paso, paso)}.\n"
