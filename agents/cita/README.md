@@ -278,8 +278,15 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
 - **Tipos de error que ya respondiste.** Cada error se clasifica por paso y causa (p. ej. «vuelta_clave |
   bad gateway», «acceso_clave | no respondió a tiempo»). Lo que respondas con los botones vale para ese
   tipo: si dijiste "error normal", los siguientes de ese tipo quedan en el log y el historial sin avisar ni
-  preguntar; si dijiste "fue bloqueo", los siguientes se tratan como bloqueo confirmado sin preguntar. Si
-  van 3 revisiones seguidas con error, avisa igual (algo más serio puede estar pasando).
+  preguntar; si dijiste "fue bloqueo", los siguientes pausan sin preguntar. Si van 3 revisiones seguidas con
+  error, avisa igual (algo más serio puede estar pasando).
+  - **La misma causa en otro paso no vuelve a preguntar:** «requested url was rejected» al entrar o al elegir
+    el trámite es el mismo error; vale la respuesta que ya diste (si diste respuestas distintas según el paso,
+    pregunta).
+  - **Un tipo marcado como bloqueo no espacia sin fin.** Pausa cada vez, pero solo sube el ritmo si nunca hubo
+    un bloqueo confirmado yendo más rápido. Si ya te bloquearon a 1,5 min y ahora el error sale a 5 min, la
+    velocidad no lo explica. Antes, cada aparición subía el ritmo un 25 %: un mismo error frecuente (una página
+    que no carga) lo llevó de 1,7 a 20 min en dos días.
 - **Rechazo marcado como falsa alarma: repite ya.** Si dijiste que «requested url was rejected» en un paso
   no es bloqueo, el agente ya no espera el botón (hasta 90 s en una página sin salida): repite el recorrido.
 - **Sonido solo en la Mac.** `afplay` no existe en Linux y en el servidor cortaba el recorrido justo después

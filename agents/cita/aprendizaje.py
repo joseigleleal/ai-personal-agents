@@ -19,7 +19,9 @@ Qué aprende (sin modelo de lenguaje, solo contando lo que pasa):
   dura el doble; la que funcionó se recuerda para ese tipo y la próxima vez prueba un 25 % menos.
 - A qué horas aparecieron citas: en esas horas (y la anterior) revisa al doble de ritmo, sin bajar del piso.
 - Tipos de error (paso + causa, p. ej. «vuelta_clave | 502 bad gateway»): lo que respondiste en Telegram
-  ("error normal" o "fue bloqueo") se recuerda por tipo, para no volver a preguntar por el mismo.
+  ("error normal" o "fue bloqueo") se recuerda por tipo, para no volver a preguntar por el mismo; la misma causa en
+  otro paso usa esa respuesta. Un tipo marcado como bloqueo pausa cada vez, pero solo vuelve a subir el ritmo si
+  nunca hubo un bloqueo confirmado yendo más rápido.
 - Cuándo toca la próxima revisión (launchd lanza el agente cada 1 min; el agente decide si toca).
 """
 import json
@@ -192,24 +194,36 @@ class Aprendizaje:
         return (f"Anotado como falsa alarma: «{falsa['frase']}» en «{falsa['paso']}» ya no detiene al agente. "
                 f"Vuelvo a revisar cada {b['cada_s'] / 60:.1f} min, sin pausa.")
 
-    def error_fue_bloqueo(self, t: str, cfg: dict | None = None) -> str | None:
+    def error_fue_bloqueo(self, t: str, cfg: dict | None = None, automatico: bool = False) -> str | None:
         """Respondiste en Telegram que el error de la hora `t` (p. ej. un 500 o un paso que no carga) era un
         bloqueo encubierto: se aprende como un bloqueo confirmado (piso, ritmo un poco más lento
-        y pausa)."""
+        y pausa).
+        `automatico`: no lo respondiste ahora, sino que es un tipo de error que ya marcaste como bloqueo. Pausa
+        igual, pero el ritmo solo sube si nunca te bloquearon yendo más rápido que ahora: si ya hubo un bloqueo
+        confirmado a un ritmo más rápido, este no se explica por la velocidad y subirlo otra vez solo espaciaría
+        las revisiones sin fin (pasó: de 1,7 a 20 min en dos días, siempre por el mismo error)."""
         cfg = cfg or {}
         r = next((r for r in reversed(self.d["revisiones"]) if r["t"] == t and r["r"] == "error"), None)
         if not r:
             return None
         r["r"] = "bloqueo"
         ritmo = self.d["ritmo"]
-        self._recordar_error(r, "bloqueo")
         frase = f"error en {r.get('paso', '?')}"
         cada = r.get("cada_s", self.intervalo(cfg))
+        mas_rapido = any(b["cada_s"] <= cada for b in self._bloqueos(cfg))
+        sube = not (automatico and mas_rapido)
+        if not automatico:
+            self._recordar_error(r, "bloqueo")
         ritmo.setdefault("bloqueos", []).append({
             "t": t, "cada_s": cada, "frase": frase, "paso": r.get("paso", "?"),
-            "por_hora": self._por_hora(datetime.fromisoformat(t)), "confirmado": True})
-        self._subir_ritmo(cada, cfg)
+            "por_hora": self._por_hora(datetime.fromisoformat(t)), "confirmado": sube,
+            **({"automatico": True} if automatico else {})})
+        if sube:
+            self._subir_ritmo(cada, cfg)
         ritmo["pausa_min"], ritmo["ultima_frase"] = cfg.get("pausa_bloqueo_min", PAUSA_MIN), frase
+        if not sube:
+            return (f"Pauso {ritmo['pausa_min']} min y sigo cada {self.intervalo(cfg) / 60:.1f} min: ya hubo "
+                    "bloqueos yendo más rápido, así que este no es por la velocidad.")
         return (f"Aprendido como bloqueo: pauso {ritmo['pausa_min']} min y después reviso cada "
                 f"{ritmo['intervalo_s'] / 60:.1f} min.")
 
@@ -223,8 +237,15 @@ class Aprendizaje:
             self.d["ritmo"].setdefault("tipos_error", {})[self.tipo_error(r.get("paso"), r["causa"])] = que
 
     def tipo_conocido(self, paso: str | None, causa: str | None) -> str | None:
-        """"normal" o "bloqueo" si ya respondiste por este tipo de error; None si nunca preguntó."""
-        return self.d["ritmo"].get("tipos_error", {}).get(self.tipo_error(paso, causa))
+        """"normal" o "bloqueo" si ya respondiste por este tipo de error; None si nunca preguntó.
+        Si no respondiste por este paso, pero sí por la misma causa en otros pasos y siempre lo mismo, vale esa
+        respuesta: «requested url was rejected» es el mismo error al entrar o al elegir el trámite."""
+        tipos = self.d["ritmo"].get("tipos_error", {})
+        exacto = tipos.get(self.tipo_error(paso, causa))
+        if exacto or not causa:
+            return exacto
+        otros = {v for k, v in tipos.items() if k.split(" | ", 1)[-1] == causa}
+        return otros.pop() if len(otros) == 1 else None
 
     def error_normal(self, t: str) -> str | None:
         """Respondiste que el error de la hora `t` es normal: no se vuelve a preguntar por ese tipo."""

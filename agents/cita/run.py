@@ -1209,13 +1209,13 @@ def main() -> None:
                         f"{pausa:%H:%M} y después sigo al mismo ritmo.")
                 if conocido == "bloqueo":  # ya dijiste que este tipo de error es un bloqueo encubierto
                     t = mem.d["revisiones"][-1]["t"]
-                    log(f"Error «{causa}» en «{paso}»: lo marcaste como bloqueo. "
-                        + (mem.error_fue_bloqueo(t, cfg) or ""))
+                    que = mem.error_fue_bloqueo(t, cfg, automatico=True) or ""
+                    log(f"Error «{causa}» en «{paso}»: lo marcaste como bloqueo. {que}")
                     hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                     PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                     mem.programar(hasta)
                     avisar(f"⛔ {datetime.now():%H:%M} Cita: «{causa}» al {PASOS.get(paso, paso)}; me dijiste "
-                           f"que eso es un bloqueo, así que pauso hasta {hasta:%H:%M} y sigo un poco más lento.")
+                           f"que eso es un bloqueo. {que}")
                 elif conocido == "normal" and not reservando and seguidos < 3:
                     log(f"Error «{causa}» en «{paso}»: lo marcaste como normal; no aviso.")
                 elif error_nuevo(str(e)) or (conocido and seguidos == 3):

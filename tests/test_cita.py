@@ -224,10 +224,25 @@ class Memoria(unittest.TestCase):
         self.assertIsNone(self.mem.tipo_conocido("vuelta_clave", "502 bad gateway"))
         self.assertIn("No te vuelvo a preguntar", self.mem.error_normal(t))
         self.assertEqual(self.mem.tipo_conocido("vuelta_clave", "502 bad gateway"), "normal")
-        self.assertIsNone(self.mem.tipo_conocido("acceso_clave", "502 bad gateway"))  # otro paso, otro tipo
+        self.assertEqual(self.mem.tipo_conocido("acceso_clave", "502 bad gateway"), "normal")  # misma causa, otro paso
         self.mem.revision("error", "certificado", causa="no respondió a tiempo")
         self.mem.error_fue_bloqueo(self.mem.d["revisiones"][-1]["t"], {})
         self.assertEqual(self.mem.tipo_conocido("certificado", "no respondió a tiempo"), "bloqueo")
+        self.mem.d["ritmo"]["tipos_error"]["inicio | no respondió a tiempo"] = "normal"
+        self.assertIsNone(self.mem.tipo_conocido("provincia", "no respondió a tiempo"))  # respuestas distintas: pregunta
+
+    def test_bloqueo_automatico_no_espacia_sin_fin(self):
+        cfg = {"pausa_bloqueo_min": 5}
+        self.mem.d["ritmo"]["intervalo_s"] = 100
+        self.mem.revision("error", "tramite", cfg, causa="no respondió a tiempo")
+        self.mem.error_fue_bloqueo(self.mem.d["revisiones"][-1]["t"], cfg)  # lo respondiste tú: sube
+        self.assertEqual(self.mem.intervalo(cfg), 120)
+        for _ in range(5):  # el mismo error vuelve a salir, ya marcado como bloqueo
+            self.mem.revision("error", "tramite", cfg, causa="no respondió a tiempo")
+            texto = self.mem.error_fue_bloqueo(self.mem.d["revisiones"][-1]["t"], cfg, automatico=True)
+        self.assertIn("no es por la velocidad", texto)
+        self.assertEqual((self.mem.intervalo(cfg), self.mem.piso(cfg)), (120, 120))  # antes: 120 → 299 s
+        self.assertEqual(self.mem.pausa_min(cfg), 5)  # pero pausa igual
 
     def test_errores_seguidos_e_informe(self):
         self.mem.revision("sin_citas")
