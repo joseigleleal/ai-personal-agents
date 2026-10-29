@@ -4,6 +4,10 @@
 seguido, que no queden en pausa eterna) y que el servidor tenga disco y memoria. Lo grave (servidor, servicio
 caído, cita quieta) lo avisa al momento, una vez por problema; lo leve lo junta y lo manda en el parte diario.
 
+Vigía cuida los servidores. La Mac (Ollama local, permisos de macOS, el entorno de `eco`, disco y sesiones
+vencidas) la revisa el chequeo del bot de [mac-remote-agent](https://github.com/joseigleleal/mac-remote-agent), con
+la misma idea: avisar una vez, decir cuándo se resolvió y reparar solo lo que tiene arreglo conocido.
+
 | | |
 |---|---|
 | Tipo | Reglas sobre archivos de estado, logs y systemd, sin modelo de lenguaje |
