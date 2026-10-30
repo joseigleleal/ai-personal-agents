@@ -1,0 +1,50 @@
+#!/bin/bash
+# Revisión antes de cada push (el repo es público): frena el push si en los commits que se van a
+# subir se cuela un secreto o un dato personal. Complementa al pre-commit; aquí se revisan los
+# commits ya hechos que todavía no están en el remoto (no solo lo que se acaba de escribir).
+# Se activa, igual que el pre-commit, con:  git config core.hooksPath scripts/hooks
+# Patrones extra privados (NIE, teléfono, correos, nombres de contactos, empleadores, clientes,
+# dominios del trabajo o la universidad): uno por línea en .secret-patterns (archivo local que
+# nunca se sube). Este hook NO debe contener datos reales: por eso lo específico va en ese archivo.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+# Secretos de forma reconocible (sin datos personales en texto plano: eso va en .secret-patterns).
+PATTERNS='sk-ant-[A-Za-z0-9]|gsk_[A-Za-z0-9]{10}|BEGIN [A-Z ]*PRIVATE KEY|@gmail\.com|ocid1\.(tenancy|user)\.|[0-9]{8,10}:[A-Za-z0-9_-]{35}'
+
+extra=()
+[ -f "$ROOT/.secret-patterns" ] && extra=(-f "$ROOT/.secret-patterns")
+
+found=0
+
+# git entrega por stdin una línea por ref que se empuja: <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Rama que se borra en el remoto: nada que revisar.
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+
+  # Commits nuevos que se van a subir. Si el remoto aún no tiene la rama, se revisa todo lo alcanzable.
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  # Archivos tocados por esos commits (añadidos/copiados/modificados/renombrados), sin repetir.
+  files="$(git diff --name-only --diff-filter=ACMR "$range" 2>/dev/null | sort -u)" || continue
+  [ -z "$files" ] && continue
+
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    # Contenido tal como quedaría en el remoto (la versión en la punta local que se sube).
+    content="$(git show "$local_sha:$f" 2>/dev/null)" || continue
+    if grep -qIiE "$PATTERNS" <<<"$content" || { [ ${#extra[@]} -gt 0 ] && grep -qIiF "${extra[@]}" <<<"$content"; }; then
+      echo "  $f"; found=1
+    fi
+  done <<<"$files"
+done
+
+if [ "$found" = 1 ]; then
+  echo "ERROR: los archivos de arriba parecen tener secretos o datos personales. Push cancelado."
+  echo "Revisa, limpia (o agrega el patrón a .secret-patterns si es un falso positivo) y vuelve a intentar."
+  exit 1
+fi
