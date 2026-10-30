@@ -1,9 +1,10 @@
 # Agente `cita` — cita previa de extranjería (toma de huellas)
 
 **Qué hace:** revisa cada pocos minutos (el ritmo lo aprende, entre un mínimo que tú fijas y 30 min) si hay citas para la toma de huellas (TIE) en la web de cita previa
-de extranjería, entrando con certificado digital por Cl@ve (o, con `acceso: sin_clave`, por «Presentación sin
-Cl@ve» con NIE, nombre y país: sirve si Cl@ve deja de ofrecer el certificado; con `acceso: alternar` usa una y
-una, y `/informe` compara cuál tarda menos y falla menos). Si hay, **reserva la primera** y avisa.
+de extranjería. La ruta por defecto es **«Presentación sin Cl@ve»** (`acceso: sin_clave`, con NIE, nombre y país:
+resultó la más estable, ver «Ruta elegida con datos» más abajo); con `acceso: clave` entra con certificado digital
+por Cl@ve, y con `acceso: alternar` usa una y una y `/informe` compara cuál tarda menos y falla menos. Si hay,
+**reserva la primera** y avisa.
 Si un paso falla, reintenta; y aprende de cada revisión (qué pasos tardan, qué botón funcionó, a qué
 horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para ajustar esperas y ritmo.
 
@@ -207,6 +208,14 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   al caducar el ritmo saltaba de golpe al mínimo, justo lo que había provocado los bloqueos. Con
   `horas_baja_piso: 0` no baja. Se olvida a los `ritmo.dias_piso` días (7); con 0 no hay piso (cada bloqueo es
   solo una pausa).
+- **Ruta elegida con datos: «sin Cl@ve».** Con `acceso: alternar` se dejó al agente usar una y una (Cl@ve /
+  «Presentación sin Cl@ve») y se compararon ~600 revisiones de cada ruta (`ruta` y `s` por revisión en
+  `aprendizaje.json`; `/informe` o `--aprendizaje` las muestran). Resultado (2026-10-30): **con Cl@ve** falla
+  (error + bloqueo) en **48,0 %** de las revisiones; **sin Cl@ve**, en **36,3 %** —casi 12 puntos menos— y tardan
+  lo mismo (~32 s). El cuello de botella de la ruta con Cl@ve es el certificado/pasarela (el paso `acceso_clave`
+  acumula los fallos; Cl@ve además cambió la pasarela y a veces ni ofrece la opción de certificado). Por eso la
+  config quedó en **`acceso: sin_clave`** (NIE, nombre y país reales, los datos que pide esa ruta): más estable,
+  sin depender del `.p12`. Para rehacer la comparación, volver a `alternar` un tiempo y leer `/informe`.
   - **Pausa por tipo** (la frase que lo delató, p. ej. «too many requests»): `pausa_bloqueo_min` (5 por
     defecto), el doble si al volver lo bloquean otra vez (tope 4 h); la que funcionó se recuerda para ese
     tipo y la próxima vez prueba un 25 % menos.
