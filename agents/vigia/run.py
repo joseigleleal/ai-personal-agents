@@ -371,9 +371,11 @@ def es_grave(clave: str, graves: list[str]) -> bool:
     return any(g in (clave, agente, tipo) for g in graves)
 
 
-def avisar_cambios(problemas: dict, estado: dict, ahora: datetime, graves: list[str] | None = None) -> list[str]:
-    """Graves: avisa los nuevos (con sonido) y los resueltos (en silencio). Leves: no avisa; cuenta cuántas veces
-    aparecieron para el parte diario (`leves`). Devuelve lo que se avisó."""
+def avisar_cambios(problemas: dict, estado: dict, ahora: datetime, graves: list[str] | None = None,
+                   avisar_resuelto: bool = False) -> list[str]:
+    """Graves: avisa los nuevos (con sonido). Cuando se arreglan, van al parte diario (`resueltos`), o con
+    `avisar_resuelto` se avisan al momento en silencio. Leves: no avisa; cuenta cuántas veces aparecieron para el
+    parte diario (`leves`). Devuelve lo que se avisó."""
     graves = GRAVES if graves is None else graves
     abiertos, avisos = estado.setdefault("abiertos", {}), []
     leves, antes = estado.setdefault("leves", {}), set(estado.get("leves_abiertos", []))
@@ -389,11 +391,21 @@ def avisar_cambios(problemas: dict, estado: dict, ahora: datetime, graves: list[
                 avisos.append(clave)
     estado["leves_abiertos"] = [c for c in problemas if not es_grave(c, graves)]
     for clave in [c for c in abiertos if c not in problemas]:
-        if notify.telegram(f"✅ Vigía {MAQUINA} · {clave.split(':')[0]}: resuelto (desde {abiertos[clave][11:16]})",
+        if not avisar_resuelto:
+            estado.setdefault("resueltos", []).append(
+                f"{clave}: desde el {abiertos[clave][8:10]}/{abiertos[clave][5:7]} {abiertos[clave][11:16]} "
+                f"hasta el {ahora:%d/%m %H:%M}")
+            del abiertos[clave]
+        elif notify.telegram(f"✅ Vigía {MAQUINA} · {clave.split(':')[0]}: resuelto (desde {abiertos[clave][11:16]})",
                            "vigia", silent=True):
             del abiertos[clave]
             avisos.append(clave)
     return avisos
+
+
+def texto_resueltos(resueltos: list[str]) -> str:
+    """Problemas graves (avisados al momento) que se arreglaron desde el último parte."""
+    return "\n\nResueltos desde el último parte:" + "".join(f"\n  · {r}" for r in resueltos) if resueltos else ""
 
 
 def texto_leves(leves: dict) -> str:
@@ -420,7 +432,7 @@ def main() -> None:
         print(texto_parte(parte, problemas))
         return
     estado = leer_json(ESTADO)
-    avisos = avisar_cambios(problemas, estado, ahora, cfg.get("avisar_al_momento"))
+    avisos = avisar_cambios(problemas, estado, ahora, cfg.get("avisar_al_momento"), cfg.get("avisar_resuelto", False))
     if cfg.get("picos"):
         avisos += atender_botones(estado, cfg)
         cambio = seguir_pico(medidas, estado, cfg, ahora)
@@ -433,9 +445,9 @@ def main() -> None:
             estado["tablero_msg"] = mid
     hoy, hora = f"{ahora:%Y-%m-%d}", cfg.get("parte_diario_hora", 9)
     if args.parte or (hora is not None and ahora.hour >= int(hora) and estado.get("parte_dia") != hoy):
-        if notify.telegram(texto_parte(parte, problemas) + texto_leves(estado.get("leves", {})), "vigia",
-                           silent=True) and not args.parte:
-            estado["parte_dia"], estado["leves"] = hoy, {}
+        if notify.telegram(texto_parte(parte, problemas) + texto_resueltos(estado.get("resueltos", []))
+                           + texto_leves(estado.get("leves", {})), "vigia", silent=True) and not args.parte:
+            estado["parte_dia"], estado["leves"], estado["resueltos"] = hoy, {}, []
     ESTADO.write_text(json.dumps(estado, ensure_ascii=False, indent=1))
     print(f"{ahora:%Y-%m-%d %H:%M} Vigía: {len(problemas)} problema(s) abierto(s)"
           + (f"; avisos: {', '.join(avisos)}" if avisos else ""))

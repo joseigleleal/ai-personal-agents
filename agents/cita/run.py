@@ -124,6 +124,21 @@ def avisar(text: str, sonido: bool = False) -> None:
         subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False)
 
 
+def solo_criticos(cfg: dict) -> bool:
+    """`avisos: criticos` (por defecto): al momento solo suena lo que pide actuar (hay citas, reserva, un dato que
+    falta, agente atascado); errores y bloqueos van al resumen diario. `avisos: todos` = cada error, bloqueo y captura."""
+    return cfg.get("avisos", "criticos") != "todos"
+
+
+def avisar_si_atascado(mem: Aprendizaje, cfg: dict) -> None:
+    """Modo críticos: un aviso con sonido cuando lleva `critico_seguidas` (10) revisiones seguidas sin poder ver si
+    hay citas (error o bloqueo). Uno por racha: avisa al llegar justo a N, no en las siguientes."""
+    n = mem.sin_completar_seguidas()
+    if n == int(cfg.get("critico_seguidas", 10)):
+        avisar(f"🆘 {datetime.now():%H:%M} Cita: {n} revisiones seguidas sin poder ver si hay citas (errores o "
+               "bloqueos). Sigo intentando; mira /informe o /captura.")
+
+
 def avisar_con_foto(text: str, foto: Path | None = None) -> None:
     """Aviso con la captura de lo que el agente está viendo (o `foto`), enviado en paralelo para no frenar la
     reserva. Si la foto no sale, manda el texto solo."""
@@ -1063,7 +1078,8 @@ def actualizar_estado(mem: Aprendizaje, cfg: dict) -> None:
         lineas.append(f"⏸️ En pausa hasta {PAUSE.read_text().strip()[11:16]}")
     else:
         lineas.append(f"Próxima: {(mem.d.get('proxima') or '?')[11:16]}")
-    lineas.append("Solo suena si hay citas, piden algo o hay un bloqueo o error nuevo.")
+    lineas.append("Solo suena si hay citas, piden algo o no logro revisar en varias vueltas seguidas."
+                  if solo_criticos(cfg) else "Solo suena si hay citas, piden algo o hay un bloqueo o error nuevo.")
     mid = notify.telegram_estado("\n".join(lineas), "cita", mem.d.get("estado_msg"))
     if mid:
         mem.d["estado_msg"] = mid
@@ -1194,8 +1210,10 @@ def main() -> None:
         except OSError as e:  # sitio caído: se avisa como cualquier error, sin abrir el navegador
             log(str(e))
             mem.revision("error", "conexion", cfg)
-            if error_nuevo(str(e)):
+            if not solo_criticos(cfg) and error_nuevo(str(e)):
                 avisar(f"⚠️ Cita: {e}. Sigo intentando.")
+            elif solo_criticos(cfg):
+                avisar_si_atascado(mem, cfg)
             return
         fijar_ip(ip)
         with sync_playwright() as p:
@@ -1207,7 +1225,7 @@ def main() -> None:
                 hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                 PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                 mem.programar(hasta)
-                avisar(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}; "
+                (log if solo_criticos(cfg) else avisar)(f"⛔ El sitio de citas bloqueó el acceso ({e}). Pauso hasta {hasta:%H:%M}; "
                        "el ritmo lo ajusto cuando me confirmes si fue un bloqueo.")
             except Exception as e:  # noqa: BLE001 - cualquier fallo se avisa con su captura
                 paso, causa = getattr(e, "paso", "?"), getattr(e, "causa", None) or causa_error(e)
@@ -1231,11 +1249,13 @@ def main() -> None:
                     hasta = datetime.now() + timedelta(minutes=mem.pausa_min(cfg))
                     PAUSE.write_text(hasta.isoformat(timespec="minutes"))
                     mem.programar(hasta)
-                    avisar(f"⛔ {datetime.now():%H:%M} Cita: «{causa}» al {PASOS.get(paso, paso)}; me dijiste "
+                    (log if solo_criticos(cfg) else avisar)(f"⛔ {datetime.now():%H:%M} Cita: «{causa}» al {PASOS.get(paso, paso)}; me dijiste "
                            f"que eso es un bloqueo. {que}")
                 elif conocido == "normal" and not reservando and seguidos < 3:
                     log(f"Error «{causa}» en «{paso}»: lo marcaste como normal; no aviso.")
-                elif (conocido and seguidos == 3) or (not conocido and error_nuevo(str(e))):  # conocido: 1 aviso por racha
+                elif solo_criticos(cfg) and not reservando:
+                    log(f"Error «{causa}» en «{paso}»: no aviso al momento (avisos: criticos); va al resumen.")
+                elif reservando or (conocido and seguidos == 3) or (not conocido and error_nuevo(str(e))):  # conocido: 1 aviso por racha
                     avisar(f"⚠️ {datetime.now():%H:%M} Cita: esta revisión no se pudo completar "
                            f"(probé {intentos} {'vez' if intentos == 1 else 'veces'}).\n"
                            f"Dónde: al {PASOS.get(paso, paso)}.\n"
@@ -1251,7 +1271,9 @@ def main() -> None:
                 if r.get("t", "") >= inicio:  # solo si esta corrida llegó a un resultado
                     archivar(r, cfg, any(x["r"] == "hay_citas" and x["t"] >= inicio for x in mem.d["revisiones"]))
                     conocido = r["r"] in ("error", "bloqueo") and mem.tipo_conocido(r.get("paso"), r.get("causa"))
-                    if not conocido or mem.errores_seguidos() >= 3:  # error ya respondido: no se pregunta de nuevo
+                    if solo_criticos(cfg):  # sin capturas ni preguntas al momento: errores y bloqueos al resumen
+                        avisar_si_atascado(mem, cfg)
+                    elif not conocido or mem.errores_seguidos() >= 3:  # error ya respondido: no se pregunta de nuevo
                         enviar_vista_si_cambio(r["r"] + (f" en «{r['paso']}»" if r.get("paso") else ""),
                                                r["t"] if r["r"] == "bloqueo" else None,
                                                r["t"] if r["r"] == "error" and not conocido else None,

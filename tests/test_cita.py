@@ -275,6 +275,18 @@ class Memoria(unittest.TestCase):
         self.assertEqual(json.loads((self.tmp / "a.json").read_text())["revisiones"][0]["paso"], "clave")
 
 
+    def test_avisos_criticos_atasco_una_vez_por_racha(self):
+        self.mem.revision("sin_citas", cfg=CFG)
+        with mock.patch.object(run, "avisar") as avisar:
+            for i in range(12):
+                self.mem.revision("bloqueo" if i % 4 == 0 else "error", "tramite", CFG)
+                run.avisar_si_atascado(self.mem, {"critico_seguidas": 10})
+        self.assertEqual(self.mem.sin_completar_seguidas(), 12)  # bloqueos y errores cuentan juntos
+        avisar.assert_called_once()                              # al llegar a 10, no en 11 ni 12
+        self.assertTrue(run.solo_criticos({}))                   # por defecto, solo críticos
+        self.assertFalse(run.solo_criticos({"avisos": "todos"}))
+
+
 class SitioSimulado(unittest.TestCase):
     """Corre el agente contra páginas locales: Chromium sin ventana y peticiones interceptadas."""
 

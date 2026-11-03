@@ -13,7 +13,7 @@ horas aparecen citas, qué tan seguido puede consultar sin que lo bloqueen) para
 | Tipo | Automatización de navegador (Playwright), sin modelo de lenguaje |
 | Frecuencia | launchd lo lanza cada 1 min; revisa según el ritmo aprendido (1–30 min, empieza en 10), las 24 h |
 | Entradas | `config/cita.yaml` (provincia, trámite, contacto) · `data/cita/certificado.p12` · `CITA_CERT_PASSWORD` en `.env` |
-| Salidas | Telegram (un mensaje de estado que se edita solo; suena solo si hay citas, piden algo o hay un bloqueo o error nuevo; resumen diario; responde comandos) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · historial de capturas por revisión en `data/cita/historial/` (14 días) · memoria `data/cita/aprendizaje.json` |
+| Salidas | Telegram (un mensaje de estado que se edita solo; con `avisos: criticos` suena solo si hay citas, piden algo o lleva varias revisiones seguidas sin poder revisar; resumen diario; responde comandos) · `data/cita.log` · capturas y HTML en `data/cita/ultima/` · última pantalla vista en `data/cita/ultima.png` (por Telegram si cambió) · historial de capturas por revisión en `data/cita/historial/` (14 días) · memoria `data/cita/aprendizaje.json` |
 
 ## Flujo
 
@@ -132,6 +132,7 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   de Cl@ve se traba `recargar_vuelta_clave_s` (40) en `procesarRespuestaClave`, también.
 - Datos que faltan: `espera_dato_min` (4); captcha: `espera_captcha_min` (3; el sitio da 5 min para confirmar).
   Aviso ⏳: `aviso_sin_citas_min` (30).
+- Avisos: `avisos` (`criticos`) y `critico_seguidas` (10). Ver «Solo avisos críticos» en las decisiones.
 
 **Para replicarlo**
 
@@ -260,6 +261,13 @@ si una página parece un bloqueo o un error raro, te pregunta con dos botones y 
   revisión, conteo de la última hora, ciclo y próxima. Suena solo lo que pide atención (citas, captcha, dato que falta,
   bloqueo o error nuevo); volver a "sin citas" llega en silencio, y a las `resumen_diario_hora` (21) llega el
   resumen de 24 h sin sonido. Con `estado_editable: false` vuelve el ⏳ cada `aviso_sin_citas_min`.
+- **Solo avisos críticos (`avisos: criticos`, por defecto).** Con ~1 de cada 3 revisiones en error o bloqueo,
+  avisar cada uno (más la captura de cada cambio) eran ~50 mensajes al día que no pedían hacer nada: el agente ya
+  reintenta y pausa solo. Ahora al momento suena solo lo que pide actuar: 🚨 hay citas, ✅ reservada, captcha o
+  dato que falta, un error mientras reservaba y 🆘 cuando lleva `critico_seguidas` (10) revisiones seguidas sin
+  poder ver si hay citas (uno por racha). Errores, bloqueos y su conteo por tipo van al resumen diario y a
+  `/informe`. Lo que se pierde: sin las preguntas «¿es un bloqueo?» el ritmo no sube por bloqueos confirmados
+  (solo pausa). `avisos: todos` vuelve al comportamiento anterior (cada error nuevo, bloqueo y captura).
 - **Ciclo real, no solo la espera.** El ritmo aprendido es la espera *después* de cada revisión; el ciclo que se ve
   llegar suma lo que dura la revisión (~1,4 min) y la espera del timer. Los mensajes muestran el ciclo medido
   (`Aprendizaje.ciclo_real`, mediana entre inicios). No se acortó la espera para igualarlo: el piso se aprendió con

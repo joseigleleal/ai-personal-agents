@@ -64,11 +64,21 @@ class Vigia(unittest.TestCase):
         with mock.patch.object(run.notify, "telegram", return_value=True) as tg:
             self.assertEqual(run.avisar_cambios({"cita:quieto": "x"}, estado, AHORA), ["cita:quieto"])
             self.assertEqual(run.avisar_cambios({"cita:quieto": "x"}, estado, AHORA), [])  # no repite
-            self.assertEqual(run.avisar_cambios({}, estado, AHORA), ["cita:quieto"])        # resuelto
+            self.assertEqual(run.avisar_cambios({}, estado, AHORA, avisar_resuelto=True), ["cita:quieto"])
         self.assertEqual(tg.call_count, 2)
         self.assertFalse(tg.call_args_list[0].kwargs.get("silent", False))  # el problema suena
         self.assertTrue(tg.call_args_list[1].kwargs["silent"])              # el "resuelto", no
         self.assertEqual(estado["abiertos"], {})
+
+    def test_resuelto_va_al_parte(self):
+        estado = {}
+        with mock.patch.object(run.notify, "telegram", return_value=True) as tg:
+            run.avisar_cambios({"sistema:disco": "disco al 90 %"}, estado, AHORA)
+            self.assertEqual(run.avisar_cambios({}, estado, AHORA + timedelta(hours=2)), [])
+        self.assertEqual(tg.call_count, 1)                       # solo el aviso del problema
+        self.assertEqual(estado["abiertos"], {})
+        self.assertIn("sistema:disco: desde el 21/10 18:00 hasta el 21/10 20:00", run.texto_resueltos(estado["resueltos"]))
+        self.assertEqual(run.texto_resueltos([]), "")
 
     def test_leve_no_avisa_y_va_al_parte(self):
         estado = {}

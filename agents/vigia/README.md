@@ -13,7 +13,7 @@ la misma idea: avisar una vez, decir cuándo se resolvió y reparar solo lo que 
 | Tipo | Reglas sobre archivos de estado, logs y systemd, sin modelo de lenguaje |
 | Frecuencia | Cada 2 min (timer de systemd en el servidor), para atender rápido los botones de los picos |
 | Entradas | `config/vigia.yaml` · memoria y logs de cada agente en `data/` · `systemctl` · disco y RAM |
-| Salidas | Telegram (problema grave nuevo con sonido; leves solo en el parte; tablero que se edita en cada vuelta, "resuelto" y parte diario en silencio) · `data/vigia.json` · `data/vigia.log` |
+| Salidas | Telegram (problema grave nuevo con sonido; leves solo en el parte; tablero que se edita en cada vuelta; parte diario en silencio con lo leve y lo resuelto) · `data/vigia.json` · `data/vigia.log` |
 
 ## Flujo
 
@@ -26,7 +26,7 @@ cada 30 min ──▶ por agente: ¿timer encendido? (apagado = detenido a prop�
              ──▶ tablero: edita el mismo mensaje de Telegram con todo lo anterior (sin sonido)
              ──▶ ¿pico? (CPU ≥ 90 % y carga de 1 min alta, o poca RAM) → 🔥 qué lo genera + botones de la lista
                  cerrada (descargar Ollama, detener un proceso, pausar cita); el botón se ejecuta en la vuelta siguiente
-             ──▶ problemas graves nuevos → ⚠️ con sonido · los que desaparecieron → ✅ en silencio
+             ──▶ problemas graves nuevos → ⚠️ con sonido · los que desaparecieron → al parte diario
                  problemas leves → sin aviso; se cuentan sus apariciones
              ──▶ una vez al día (parte_diario_hora): 🛰️ parte de todos + leves del día, en silencio
 ```
@@ -66,12 +66,12 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
    `systemctl is-active` de cada servicio. Solo la carga de 15 min por núcleo (`carga_max_por_nucleo`, 1,5) cuenta
    como problema: un pico mientras un modelo responde es normal.
 5. `avisar_cambios` separa con `es_grave` (lista `avisar_al_momento`: clave, agente o tipo). Graves: compara con
-   `data/vigia.json` (`abiertos`: clave → desde cuándo); lo nuevo se avisa con sonido y lo que ya no aparece,
-   "resuelto" en silencio (solo se guarda si Telegram lo entregó). Leves: no avisa; en `leves` cuenta cuántas veces
+   `data/vigia.json` (`abiertos`: clave → desde cuándo); lo nuevo se avisa con sonido y lo que ya no aparece
+   pasa a `resueltos` para el parte (con `avisar_resuelto: true`, "resuelto" al momento en silencio). Leves: no avisa; en `leves` cuenta cuántas veces
    apareció cada uno (aparición = no estaba en la vuelta anterior, `leves_abiertos`).
 6. Con `tablero: true`, edita el mismo mensaje con el parte completo (`notify.telegram_estado`, id en `tablero_msg`).
-7. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio con el resumen de leves
-   (`texto_leves`) y los reinicia (`parte_dia` en el estado).
+7. Si ya pasó `parte_diario_hora` y hoy no se mandó, envía el parte en silencio con lo resuelto
+   (`texto_resueltos`) y el resumen de leves (`texto_leves`), y los reinicia (`parte_dia` en el estado).
 
 **Para replicarlo**
 
@@ -109,8 +109,8 @@ Así uno no tiene que preguntar "¿cómo va?" ni leer logs para enterarse de que
   mismo. El vigía corre aparte y solo lee.
 - **Timer apagado = detenido a propósito:** apagar un agente (por ejemplo `empleo` mientras se entrena su modelo)
   no debe generar alarmas; aparece como "detenido" en el parte.
-- **Un aviso por problema:** avisar en cada vuelta sería ruido y se terminaría ignorando. Se avisa al aparecer y al
-  resolverse.
+- **Un aviso por problema:** avisar en cada vuelta sería ruido y se terminaría ignorando. Se avisa al aparecer; que se
+  resolvió lo cuenta el parte diario (un mensaje al día en vez de uno por problema).
 - **Graves al momento, leves al parte:** un umbral que oscila (ej. el % de errores de cita rondando el 50 %) abría y
   cerraba el problema cada pocos minutos: decenas de avisos al día. Lo que no pide actuar ya va al parte diario con
   su conteo; al momento solo lo grave (RAM, disco, CPU, servicio caído o un agente que dejó de revisar).

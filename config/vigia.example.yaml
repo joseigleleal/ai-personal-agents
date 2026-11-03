@@ -6,6 +6,7 @@ tablero: true             # un mensaje que se edita en cada vuelta (agentes, CPU
 # Qué se avisa al momento: clave completa ("cita:quieto"), agente ("sistema": RAM, disco, CPU, servicios) o tipo
 # ("fallo", "detenido"). Lo demás (ej. cita:errores, empleo:quieto) solo en el parte diario, con cuántas veces apareció.
 avisar_al_momento: [sistema, fallo, detenido, cita:quieto]
+avisar_resuelto: false      # false: lo grave que se arregló va al parte diario · true: "resuelto" al momento, sin sonido
 
 agentes:
   cita:

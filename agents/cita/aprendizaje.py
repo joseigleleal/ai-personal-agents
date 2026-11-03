@@ -298,6 +298,15 @@ class Aprendizaje:
             n += 1
         return n
 
+    def sin_completar_seguidas(self) -> int:
+        """Revisiones seguidas, desde la última, que no llegaron a ver si hay citas (error o bloqueo)."""
+        n = 0
+        for r in reversed(self.d["revisiones"]):
+            if r["r"] not in ("error", "bloqueo"):
+                break
+            n += 1
+        return n
+
     def es_falsa_alarma(self, frase: str, paso: str) -> bool:
         return {"frase": frase, "paso": paso} in self.d["ritmo"].get("falsas_alarmas", [])
 
